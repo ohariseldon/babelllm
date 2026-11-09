@@ -10,7 +10,7 @@ class Fake:
         self.f = {"notas": notas, "redator": redator, "revisao": revisao}
         self.usage = d.Usage(); self.spec = "fake:x"; self.provider = "fake"; self.calls = []
     def __call__(self, system, user, max_tokens=0):
-        stage = "notas" if system.startswith(("Reduza", "Reduce")) else "redator" if system.startswith(("Escreva", "Write")) else "revisao"
+        stage = "notas" if system.startswith(("Reduza", "Reduce")) else "redator" if system.startswith(("Escreva", "Write", "Neste texto", "Some items")) else "revisao"
         self.calls.append(stage); self.usage.add(1, 1)
         return self.f[stage](user)
 
@@ -46,7 +46,7 @@ def test_retry_when_number_lost():
         return "Texto sem o número." if len(tries) == 1 else "Texto com 42 itens."
     m = Fake(notas=lambda u: "- 42 itens", redator=red, revisao=lambda u: u)
     p = d.process_piece(d.Piece("Foram contados 42 itens no total.", True), "pt", m, m, m, secret=False)
-    assert p.out == "Texto com 42 itens." and p.lost == [] and "Inclua" in tries[1]
+    assert p.out == "Texto com 42 itens." and p.lost == [] and "Itens que faltam: 42" in tries[1]
 
 
 def test_revision_dropped_if_it_loses_facts():

@@ -334,6 +334,10 @@ PROMPTS = {
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "Seção: {h}\n\n", "faltou": "\n\nInclua também: {x}",
+        "reparo": ("Neste texto faltam alguns itens. Insira cada um deles uma vez, no lugar que a nota indica, "
+                   "mudando o mínimo possível do resto. Mantenha todos os códigos entre chaves já presentes. "
+                   "Responda só com o texto completo corrigido."),
+        "reparo_user": "Itens que faltam: {x}\n\nNotas onde eles aparecem:\n{n}\n\nTexto:\n{t}",
         "logica": (" Reorganize a lógica do parágrafo: mude a ordem das ideias, junte ou divida frases, inverta "
                    "causa e efeito ou geral e exemplo quando o sentido permitir."),
         "codigos": (" Os códigos entre chaves ({N..} número, {E..} nome ou sigla, {Em..} masculino, {Ef..} feminino, "
@@ -352,6 +356,9 @@ PROMPTS = {
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "Section: {h}\n\n", "faltou": "\n\nAlso include: {x}",
+        "reparo": ("Some items are missing from this text. Insert each one once, where its note places it, changing "
+                   "as little else as possible. Keep every brace code already present. Reply with the full corrected text only."),
+        "reparo_user": "Missing items: {x}\n\nNotes where they appear:\n{n}\n\nText:\n{t}",
         "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, swap "
                    "cause and effect or general and example where the meaning allows."),
         "codigos": (" The codes in braces ({N..} number, {E..} name or acronym, {L..} link, {C..} citation) are "
@@ -715,10 +722,12 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
         coded, draft, lost = clean(redator(w_sys, head + notes, max_tokens=cap))
-        if lost:
+        if lost:  # reparo: o redator insere só o que faltou, no texto que já escreveu
             st = (p.marks, p.coverage)
-            c2, retry, lost2 = clean(redator(w_sys, head + notes + P["faltou"].format(x="; ".join(lost)), max_tokens=cap))
-            if len(lost2) < len(lost):
+            where = "\n".join(l for l in notes.splitlines() if any(x in l for x in lost)) or notes
+            c2, retry, lost2 = clean(redator(P["reparo"] + codes_rule, P["reparo_user"].format(
+                x="; ".join(lost), n=where, t=coded), max_tokens=cap))
+            if len(lost2) < len(lost) and len(retry.split()) > 0.8 * len(draft.split()):
                 coded, draft, lost = c2, retry, lost2
             else:
                 p.marks, p.coverage = st
