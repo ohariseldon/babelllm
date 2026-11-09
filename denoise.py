@@ -435,6 +435,7 @@ class Model:
 
     def __post_init__(self):
         self.limiter = Limiter(self.rpm)
+        self.gate = Gate()
         self.provider, _, self.name = self.spec.partition(":")
         self.provider = self.provider.lower()
         if self.provider not in {"openai", "ollama", "anthropic", "gemini", "compat"} or not self.name:
@@ -491,9 +492,10 @@ class Model:
             self.limiter.wait()
             c = self._conn()
             try:
-                c.request("POST", path, json.dumps(body).encode(), {"Content-Type": "application/json", **headers})
-                resp = c.getresponse()
-                raw = resp.read()
+                with self.gate:
+                    c.request("POST", path, json.dumps(body).encode(), {"Content-Type": "application/json", **headers})
+                    resp = c.getresponse()
+                    raw = resp.read()
             except (OSError, http.client.HTTPException) as e:
                 c.close()
                 setattr(_local, self.url, None)
@@ -502,6 +504,7 @@ class Model:
                     continue
                 raise RuntimeError(f"{self.spec}: {e}") from None
             if resp.status == 200:
+                self.gate.success()
                 return json.loads(raw)
             msg = raw.decode(errors="replace")[:600]
             if resp.status == 400 and "max_tokens" in msg and "max_tokens" in body:  # o-series etc.
@@ -511,13 +514,47 @@ class Model:
                 # espera o que a API pede (cabeçalho retry-after ou "retryDelay": "17s" do Gemini)
                 hint = resp.getheader("retry-after") or (re.findall(r'retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)s', msg) or [0])[0]
                 wait = float(hint or 0) or min(1.5 * 2 ** attempt, 60)
-                if resp.status == 429:
+                if resp.status == 429 and "concurrent" in msg.lower():
+                    self.gate.too_many()  # limite de simultâneos: menos threads, não menos ritmo
+                    time.sleep(min(1.0 + attempt, 10))
+                elif resp.status == 429:
                     self.limiter.pause(min(wait, 90))
                 else:
                     time.sleep(min(wait + 0.5, 90))
                 continue
             raise RuntimeError(f"{self.spec}: HTTP {resp.status}: {msg[:300]}")
         raise RuntimeError(f"{self.spec}: sem resposta")
+
+
+class Gate:
+    """Limite adaptativo de pedidos simultâneos de um modelo (AIMD).
+
+    Começa sem teto prático; quando a API recusa por excesso de pedidos simultâneos
+    (429 "concurrent"), corta o teto pela metade; a cada 20 respostas boas, sobe 1."""
+
+    def __init__(self, start: int = 256):
+        self.cv, self.limit, self.busy, self.ok = threading.Condition(), start, 0, 0
+
+    def __enter__(self):
+        with self.cv:
+            while self.busy >= self.limit:
+                self.cv.wait()
+            self.busy += 1
+
+    def __exit__(self, *exc):
+        with self.cv:
+            self.busy -= 1
+            self.cv.notify_all()
+
+    def success(self):
+        with self.cv:
+            self.ok += 1
+            if self.ok % 20 == 0 and self.limit < 256:
+                self.limit += 1
+
+    def too_many(self):
+        with self.cv:
+            self.limit = max(2, min(self.limit, self.busy) // 2)
 
 
 class Limiter:

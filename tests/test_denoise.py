@@ -200,3 +200,14 @@ def test_limiter_pause_recovers():
     t0 = _t.monotonic(); lim.wait(); first = _t.monotonic() - t0
     t0 = _t.monotonic(); lim.wait(); second = _t.monotonic() - t0
     assert first >= 0.15 and second < 0.05
+
+
+def test_gate_halves_on_concurrency_error_and_recovers():
+    g = d.Gate(start=64)
+    g.busy = 40
+    g.too_many()
+    assert g.limit == 20
+    g.busy = 0
+    for _ in range(40):
+        g.success()
+    assert g.limit == 22
