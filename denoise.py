@@ -55,7 +55,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__version__ = "0.7.0"
+__version__ = "0.8.1"
 
 # ---------------------------------------------------------------- Unicode
 
@@ -377,6 +377,21 @@ PROMPTS = {
     "pt": {
         "notas": ("Reduza o texto a notas telegráficas, uma por linha com '- ', sem conectivos nem artigos. "
                   "Copie números, nomes, citações e URLs exatamente. Linha em branco entre parágrafos. Só as notas."),
+        "fatos": ("Reduza o texto a uma lista de fatos, um por linha com '- ': cada dado, cada relação (causa, "
+                  "comparação, antes/depois) e cada posição do autor, como afirmação curta e neutra, sem a retórica "
+                  "do original. Copie cada código entre chaves exatamente, uma vez. Só a lista."),
+        "enquadre": {
+            "base": (" Ponto de vista deste trecho, sorteado: {v}. Agrupe as ideias assim: {g}. Escreva a partir só "
+                     "dos fatos da lista, com enquadramento seu; não copie a ordem da lista nem invente exemplo, "
+                     "causa ou número. O sujeito de cada fato continua o mesmo (o país não vira cidade; quem mede ou "
+                     "data não vira o que é medido). Escreva {p}."),
+            "vista": ["como um repórter que relata o que foi medido", "como um analista explicando a um cliente",
+                      "como uma nota técnica seca", "como quem conversa com um leitor leigo, sem gíria",
+                      "como um editor que resume para a primeira página", "como um professor que dá contexto"],
+            "grupo": ["por ator (quem faz o quê)", "por tempo (do mais antigo ao mais recente)",
+                      "do efeito para a causa", "do geral para o detalhe", "do detalhe para o geral",
+                      "do dado mais forte para o mais fraco"],
+        },
         "redator": ("Escreva em português do Brasil, como prosa de artigo, o que estas notas dizem, sem acrescentar "
                     "nada. Palavras e ordem suas, frases de tamanhos variados, sem clichês de IA. Bloco de notas = "
                     "parágrafo; '[lista]' = item com '- '. Números, nomes, citações e URLs exatos. Não acrescente fatos, "
@@ -440,6 +455,20 @@ PROMPTS = {
     "en": {
         "notas": ("Reduce the text to terse notes, one per line with '- ', no connectives or articles. Copy numbers, "
                   "names, citations and URLs exactly. Blank line between paragraphs. Notes only."),
+        "fatos": ("Reduce the text to a list of facts, one per line with '- ': each data point, each relation (cause, "
+                  "comparison, before/after) and each position the author takes, as a short neutral statement, without "
+                  "the original's rhetoric. Copy every brace code exactly, once. List only."),
+        "enquadre": {
+            "base": (" Point of view for this passage, drawn at random: {v}. Group the ideas this way: {g}. Write only "
+                     "from the facts in the list, with your own framing; do not copy the list order or invent examples, "
+                     "causes or numbers. Each fact keeps its subject (a country does not become a city; whoever measures "
+                     "or dates something does not become the thing measured). Write {p}."),
+            "vista": ["as a reporter telling what was measured", "as an analyst explaining to a client",
+                      "as a dry technical note", "as someone talking to a lay reader, no slang",
+                      "as an editor summing up for the front page", "as a teacher giving context"],
+            "grupo": ["by actor (who does what)", "by time (oldest to newest)", "from effect to cause",
+                      "from general to detail", "from detail to general", "from strongest to weakest data point"],
+        },
         "redator": ("Write, as English article prose, what these notes say, adding nothing. Your own words and order, "
                     "varied sentence length, no AI stock phrases. Note block = paragraph; '[list]' = '- ' item. "
                     "Numbers, names, citations and URLs exact. Add no facts, causes, examples or opinions; plain tone; "
@@ -1102,10 +1131,23 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         final, lost_codes = vault.decode(s)
         return s, final, lost_codes
 
+    frame = ""
     try:
         if notas == "prosa":  # o redator vê o texto codificado inteiro: mais fiel, menos distante do original
             notes = src
             w_sys = P["redator_prosa"] + w_sys[len(P["redator"]):]
+        elif notas == "fatos":  # resume em fatos e reescreve de outro ponto de vista: muda o enquadramento
+            notes = redator(P["fatos"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 3)
+            for c in (vault.back if vault else []):  # código que o resumo perdeu: volta a frase do original
+                if c not in notes:
+                    sent = next((x for x in re.split(r"(?<=[.!?;])\s+", src) if c in x), "")
+                    if sent and sent not in notes:
+                        notes += "\n- " + sent.strip()
+            Q, r = P["enquadre"], rng or _rng
+            n_par = len([b for b in p.text.split("\n\n") if b.strip()])
+            par = (f"{n_par} parágrafos separados por linha em branco" if n_par > 1 else "um parágrafo") if lang == "pt" \
+                else (f"{n_par} paragraphs separated by a blank line" if n_par > 1 else "one paragraph")
+            frame = Q["base"].format(v=r.choice(Q["vista"]), g=r.choice(Q["grupo"]), p=par)
         elif notas is None:
             notes = local_notes(src, lang)
         else:
@@ -1132,6 +1174,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                 return p
             coded, draft, lost = clean(fixed)
         else:
+            w_sys += frame
             coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
         pairs = code_pairs(src) if vault else []
         bad = broken_pairs(pairs, coded)
@@ -1184,6 +1227,14 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         if lang == "pt":  # palavras de Portugal que soam estranhas no Brasil
             out = re.sub(r"(?<![\wÀ-ÿ])(" + "|".join(_PT_PT) + r")(?![\wÀ-ÿ])",
                          lambda m: _PT_PT[m.group(1)], out)
+        if lang == "pt":  # "entre em 2015 e em 2016", "desde em 2010": preposição dobrada antes do ano
+            out = re.sub(r"(?<![\wÀ-ÿ])(entre|desde|até|durante|após|para|de) em (?=\d{4}(?!\d))", r"\1 ", out,
+                         flags=re.I)
+            out = re.sub(r"(?<![\wÀ-ÿ])(entre (?:\d{4}|[\wÀ-ÿ]+ de \d{4})) e em (?=\d{4}(?!\d))", r"\1 e ", out)
+            out = re.sub(r"(?<![\wÀ-ÿ])(milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões)) ([a-zà-ú]{3,}s)(?![\wÀ-ÿ])",
+                         lambda m: m.group(0) if m.group(2) in _NOT_NOUN or m.group(2) in {"de", "em"}
+                         or (m.group(2) not in _UNITS and re.search(r"(?:ad|id)[oa]s$", m.group(2)))
+                         else f"{m.group(1)} de {m.group(2)}", out)
         if "—" not in p.text:  # travessão que o original não tinha: vira vírgula
             out = re.sub(r"\s*—\s*", ", ", out)
             out = re.sub(r",\s*([.;:!?])", r"\1", out)
@@ -1322,6 +1373,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--redator", help="sinônimo de -m")
     ap.add_argument("--notas", default="prosa",
                     help="o que o redator recebe: 'prosa' (padrão: o texto codificado inteiro, o mais fiel), "
+                         "'fatos' (o redator resume em fatos e reescreve de um ponto de vista sorteado: muda o "
+                         "enquadramento, ~1 chamada a mais por trecho), "
                          "'local' (notas sem LLM: reescrita mais distante, erra mais a relação entre fatos) "
                          "ou provedor:modelo")
     ap.add_argument("--verificar", metavar="provedor:modelo",
@@ -1361,7 +1414,7 @@ def main(argv: list[str] | None = None) -> int:
         pool: dict[str, Model] = {}
         mk = lambda s: pool.setdefault(s, Model(s, a.base_url, a.temperatura, rpm=a.rpm))
         redator = mk(spec)
-        notas = None if a.notas.lower() == "local" else "prosa" if a.notas.lower() == "prosa" else mk(a.notas)
+        notas = None if a.notas.lower() == "local" else a.notas.lower() if a.notas.lower() in ("prosa", "fatos") else mk(a.notas)
         revisao = mk(a.revisao) if a.revisao and a.revisao.lower() not in {"nao", "não", "no", "off"} else None
         verify = mk(a.verificar) if a.verificar else None
         last = revisao or redator

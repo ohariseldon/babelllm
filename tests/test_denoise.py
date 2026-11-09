@@ -433,3 +433,39 @@ def test_list_items_come_back_in_place_or_original_kept():
     bad = Cap(lambda u: "Um parágrafo só, juntando tudo.")
     p = d.process_piece(d.Piece(lst, True), "pt", "prosa", bad, None, secret=False)
     assert p.out == lst and p.lost == ["(lista mantida como estava)"]
+
+
+def test_fatos_mode_summarizes_then_reframes_and_restores_lost_code():
+    seen = {}
+    class Cap(Fake):
+        def __call__(self, system, user, max_tokens=0):
+            if system.startswith("Escreva"):
+                seen["sys"] = system
+            return super().__call__(system, user, max_tokens)
+    def notas(u):
+        seen["src"] = u
+        codes = re.findall(r"\{N\w+\}", u)
+        return "- foram " + codes[0] + " crianças a menos"  # o resumo perde o ano
+    def red(u):
+        seen["notes"] = u
+        return " ".join(re.findall(r"\{[NA]\w+\}", u)[:2]) + " crianças a menos."
+    import random
+    p = d.process_piece(d.Piece("Foram 817 mil crianças a menos em 2024.", True), "pt", "fatos",
+                        Cap(notas=notas, redator=red), None, rng=random.Random(1))
+    assert "Ponto de vista deste trecho" in seen["sys"] and "Agrupe as ideias" in seen["sys"]
+    assert re.search(r"\{A\w+\}", seen["notes"]), "frase com o ano perdido volta às notas"
+    assert "817 mil" in p.out and "2024" in p.out and not p.error
+
+
+def test_fatos_keeps_paragraphs_and_fixes_doubled_prep():
+    seen = {}
+    class Cap(Fake):
+        def __call__(self, system, user, max_tokens=0):
+            if system.startswith("Escreva"):
+                seen["sys"] = system
+            return super().__call__(system, user, max_tokens)
+    src = "Em 2015 nasceram 3 milhões de crianças.\n\nEm 2016 foram 2 milhões de crianças."
+    red = lambda u: "Os nascimentos caíram entre em 2015 e em 2016, de 3 milhões crianças a 2 milhões crianças."
+    p = d.process_piece(d.Piece(src, True), "pt", "fatos", Cap(notas=lambda u: u, redator=red), None, secret=False)
+    assert "2 parágrafos" in seen["sys"]
+    assert "entre 2015 e 2016" in p.out and "3 milhões de crianças" in p.out and "milhões de de" not in p.out
