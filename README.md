@@ -1,6 +1,6 @@
 # babelllm
 
-**Tira a marca d'água estatística de LLM dos seus artigos feitos com ajuda de IA, em lote, com um modelo barato à sua escolha.**
+**Tira a marca d'água estatística de LLM de um artigo ou de um lote de artigos, removendo o carimbo do modelo de origem, com um modelo barato à sua escolha.**
 
 *English summary below.*
 
@@ -15,9 +15,6 @@ conteúdo, com os mesmos números, sem a sequência de palavras que carrega a ma
 - **Sigilo**: números, nomes, siglas, links e citações vão para a API como códigos (`{Nkq}`, `{Exm}`)
   e são destrocados no seu computador. A API nunca vê os dados.
 - **Qualquer modelo**: Ollama, OpenAI, Anthropic, Gemini, OpenRouter, Groq, LM Studio, vLLM.
-
-> **Não é um humanizador** e não promete enganar detectores de "texto de IA". O texto de saída
-> continua sendo escrito por um modelo. Ver [Limites](#limites).
 
 ## Instalação
 
