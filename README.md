@@ -10,7 +10,7 @@ trecho a partir de notas, com um modelo que você escolhe (local, antigo ou bara
 conteúdo, com os mesmos números, sem a sequência de palavras que carrega a marca.
 
 - **Um arquivo só**, biblioteca padrão do Python, sem dependências obrigatórias.
-- **Rápido**: 20 artigos em ~38 s com Claude Haiku 4.5 (medido; ver [Resultados](#resultados)).
+- **Rápido**: 20 artigos em ~38 s com Claude Haiku 4.5, sem erros (medido; ver [Resultados](#resultados)).
 - **Barato**: uma chamada de modelo por trecho de ~150 palavras.
 - **Sigilo**: números, nomes, siglas, links e citações vão para a API como códigos (`{Nkq}`, `{Exm}`)
   e são destrocados no seu computador. A API nunca vê os dados.
@@ -91,7 +91,7 @@ A volta é exata. Custa fluidez.
 |---|---|
 | `-m provedor:modelo` | redator (`ollama`, `openai`, `anthropic`, `gemini`, `compat` + `--base-url`) |
 | `--marcadores N` | 0 a 10 marcadores removíveis por 10 palavras (padrão 0) |
-| `--sigilo basico\|forte\|nao` | o que vai como código para a API (padrão `basico`) |
+| `--sigilo basico\|nomes\|forte\|nao` | o que vai como código para a API (padrão `basico`; `nomes` deixa os números em claro) |
 | `--manter-logica` | não reorganiza ideias nem troca sinônimos |
 | `--notas provedor:modelo` | notas feitas por um modelo em vez de locais (reescrita mais funda, ~2× o custo) |
 | `--revisao provedor:modelo` | um passe extra de correção depois do redator |
@@ -115,8 +115,9 @@ de uma marca, ninguém pode afirmar isso.
 
 Medidos em 20 artigos reais em português (~1.500 palavras cada), com Claude Haiku 4.5:
 
-- **Tempo**: 20 artigos em 37,6 s; 4 artigos em 14 s.
-- **Tokens**: ~123 mil de entrada e ~66 mil de saída nos 20 artigos.
+- **Tempo**: 20 artigos em 38 s, sem erros de API (o script se ajusta ao limite de pedidos simultâneos).
+- **Tokens**: ~177 mil de entrada e ~59 mil de saída nos 20 artigos.
+- **Fidelidade**: no artigo de demografia, conferido à mão, os ~30 números saíram com o valor, a unidade e o ano certos.
 
 **Teste de marca d'água com chave própria** (`bench/marca_teste.py`): marcamos o artigo escolhendo, para cada
 frase, a paráfrase com mais palavras "verdes" (o princípio do SynthID), e medimos o z-score antes e depois.
@@ -125,13 +126,12 @@ z > 4 = marca detectada; |z| < 2 = indistinguível de texto sem marca.
 | artigo de demografia | sem contexto | contexto de 1 palavra | contexto de 3 palavras |
 |---|---|---|---|
 | original | 0,2 | −0,1 | 0,1 |
-| marcado | 2,1 | 2,6 | **4,2** |
-| babelllm padrão | 1,2 | 1,5 | 2,1 |
-| babelllm `--marcadores 5` | 1,7 | 1,9 | **0,1** |
+| marcado | 2,2 | 4,0 | **4,1** |
+| babelllm padrão | 1,2 | 0,9 | −0,5 |
+| babelllm `--marcadores 3` | 0,8 | −0,4 | −0,5 |
 
-Num segundo artigo, a marca de contexto 3 foi de 5,2 para 0,2 com `--marcadores 5`. A lista verde fixa
-(sem contexto) é a que mais resiste, porque as palavras de conteúdo sobrevivem; a troca de sinônimos no
-redator mira esse caso.
+Num segundo artigo, a marca foi de 1,6 / 3,9 / 4,4 para 0,2 / 0,6 / 0,8 no padrão. Todas as variantes testadas
+ficaram com |z| < 2, inclusive a lista verde fixa, graças à troca de sinônimos no redator.
 
 Para repetir: `python bench/marca_teste.py artigo.md -m anthropic:claude-haiku-4-5`.
 Para medir só o tempo sem gastar tokens: `bench/mock_server.py` simula uma API compatível com OpenAI.
@@ -144,8 +144,11 @@ Para medir só o tempo sem gastar tokens: `bench/mock_server.py` simula uma API 
 - **Marcas que não dependem de contexto** (lista verde fixa) caem menos que as de contexto.
 - **Marcas futuras**: não há como testar contra o que ainda não foi publicado. O desenho (notas sem a
   prosa, códigos, reorganização, sinônimos, marcadores) ataca os mecanismos conhecidos, não garante o resto.
-- **Qualidade**: modelos pequenos às vezes perdem um código ou escrevem pior em volta deles. Confira os
-  `itens_perdidos` e leia o texto antes de publicar.
+- **Qualidade**: os números voltam certos, mas um modelo pequeno às vezes muda a relação entre os fatos
+  (quem fez o quê, causa e consequência) em uma ou duas frases por artigo, e tende a escrever mais formal.
+  Confira os `itens_perdidos` e **leia o texto antes de publicar**. Um redator melhor ou `--revisao` reduzem isso.
+- **Marcas reais de fornecedor**: o teste acima usa uma marca nossa, com o mesmo princípio. Ainda não medimos
+  contra a marca de um fornecedor.
 - **C2PA em imagens**: os metadados saem; credenciais duráveis (marca nos pixels) não.
 
 ## Uso responsável
@@ -174,8 +177,9 @@ For each ~150-word chunk it strips invisible Unicode and file metadata, replaces
 links and citations with keyed codes (the API never sees them), builds local content-word notes, and has the
 writer model rewrite the chunk from the notes only, reordering ideas and swapping synonyms. Codes are verified
 and restored locally. Optional removable markers (`--marcadores N`) break the context window of the writer's
-own watermark. Measured: 20 real articles in 37.6 s with Claude Haiku 4.5; an own-key context watermark went
-from z = 4.2–5.2 to 0.1–0.2. It is not a humanizer and does not target AI-style classifiers.
+own watermark. Measured: 20 real articles in 38 s with Claude Haiku 4.5, no errors; an own-key watermark went
+from z ≈ 4 to |z| < 2 on every window tested. Read the output before publishing: small writers can still
+blur how facts relate in a sentence or two. It is not a humanizer and does not target AI-style classifiers.
 
 ```bash
 pip install git+https://github.com/ohariseldon/babelllm
