@@ -62,6 +62,17 @@ num contexto que não existe mais no texto final, então ali o detector vê cara
 - Não afeta marcas que não dependem de contexto (lista verde fixa).
 - Custa até N×10% a mais de tokens de saída.
 
+## Sigilo (padrão)
+
+Antes de ir para a API, números, nomes próprios, siglas, links e citações viram códigos com
+chave aleatória por trecho: `{Nkq}` número, `{Exm}` nome (`{Emxm}`/`{Efxm}` com gênero, quando
+o artigo do original diz), `{Lab}` link, `{Cab}` citação. O modelo nunca vê os dados reais,
+não faz conta nem "corrige" fatos; o script destroca no fim. Se um código some, o redator
+tenta de novo pedindo o código (nunca o dado), e o que faltar sai em `itens_perdidos`.
+Nomes são as palavras com maiúscula no meio de frase que nunca aparecem em minúscula no
+artigo, mais as siglas. Ida e volta testada nos 269 trechos de 20 artigos reais: idêntica.
+Custa ~20% a mais de tokens de entrada. `--sem-sigilo` desliga.
+
 ## Reorganização da lógica
 
 Por padrão o redator também muda a ordem das ideias, junta e divide frases e inverte
@@ -103,7 +114,7 @@ Para repetir: `python bench/make_articles.py bench/artigos`, `python bench/mock_
 
 ## Testes
 
-`python -m pytest -q tests` (15 testes, sem rede).
+`python -m pytest -q tests` (18 testes, sem rede).
 
 ## O que saiu da v0.2 e por quê
 

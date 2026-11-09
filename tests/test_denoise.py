@@ -45,27 +45,27 @@ def test_retry_when_number_lost():
         tries.append(u)
         return "Texto sem o número." if len(tries) == 1 else "Texto com 42 itens."
     m = Fake(notas=lambda u: "- 42 itens", redator=red, revisao=lambda u: u)
-    p = d.process_piece(d.Piece("Foram contados 42 itens no total.", True), "pt", m, m, m)
+    p = d.process_piece(d.Piece("Foram contados 42 itens no total.", True), "pt", m, m, m, secret=False)
     assert p.out == "Texto com 42 itens." and p.lost == [] and "Inclua" in tries[1]
 
 
 def test_revision_dropped_if_it_loses_facts():
     m = Fake(notas=lambda u: "- 42", redator=lambda u: "São 42 itens.", revisao=lambda u: "São muitos itens.")
-    p = d.process_piece(d.Piece("Há 42 itens na caixa.", True), "pt", m, m, m)
+    p = d.process_piece(d.Piece("Há 42 itens na caixa.", True), "pt", m, m, m, secret=False)
     assert p.out == "São 42 itens."
 
 
 def test_writer_never_sees_original_prose():
     seen = []
     m = Fake(notas=lambda u: "- fato um", redator=lambda u: (seen.append(u), "Novo texto.")[1], revisao=lambda u: u)
-    d.process_piece(d.Piece("A frase original muito específica aqui.", True), "pt", m, m, None)
+    d.process_piece(d.Piece("A frase original muito específica aqui.", True), "pt", m, m, None, secret=False)
     assert "original muito específica" not in seen[0]
 
 
 def test_error_keeps_original_and_is_reported():
     def boom(u): raise RuntimeError("HTTP 401")
     m = Fake(notas=boom)
-    p = d.process_piece(d.Piece("Texto qualquer com palavras.", True), "pt", m, m, None)
+    p = d.process_piece(d.Piece("Texto qualquer com palavras.", True), "pt", m, m, None, secret=False)
     assert p.error and p.out == "Texto qualquer com palavras."
 
 
@@ -73,7 +73,7 @@ def test_end_to_end(tmp_path):
     src = tmp_path / "in"; src.mkdir()
     (src / "a.md").write_text("# Título\n\nVale ressal​tar que 10 alunos (Silva, 2020) vieram.\n", encoding="utf-8")
     m = Fake(notas=lambda u: "- 10 alunos vieram (Silva, 2020)", redator=lambda u: "Vieram 10 alunos (Silva, 2020).", revisao=lambda u: u)
-    rep = d.run([src / "a.md"], tmp_path / "out", m, m, m, 4, 350, None, False, "auto")
+    rep = d.run([src / "a.md"], tmp_path / "out", m, m, m, 4, 350, None, False, "auto", secret=False)
     out = (tmp_path / "out" / "a.md").read_text(encoding="utf-8")
     assert out == "# Título\n\nVieram 10 alunos (Silva, 2020).\n"
     f = rep["arquivos"][0]
@@ -117,7 +117,7 @@ def test_local_notes_drop_glue_keep_facts():
 def test_local_notes_is_default_and_saves_a_call(tmp_path):
     src = tmp_path / "a.md"; src.write_text("Foram 10 alunos (Silva, 2020) que vieram ontem.\n", encoding="utf-8")
     m = Fake(redator=lambda u: "Vieram 10 alunos ontem (Silva, 2020).")
-    rep = d.run([src], tmp_path / "o", None, m, None, 0, 150, None, False, "pt")
+    rep = d.run([src], tmp_path / "o", None, m, None, 0, 150, None, False, "pt", secret=False)
     assert m.calls == ["redator"] and rep["arquivos"][0]["itens_perdidos"] == []
 
 
@@ -135,9 +135,47 @@ def test_markers_asked_from_last_writer_and_removed(tmp_path):
         def __call__(self, system, user, max_tokens=0):
             systems.append(system); return super().__call__(system, user, max_tokens)
     s = Spy(redator=red)
-    p = d.process_piece(d.Piece("Foram 10 alunos (Silva, 2020) que vieram ontem.", True), "pt", None, s, None, marks=5)
+    p = d.process_piece(d.Piece("Foram 10 alunos (Silva, 2020) que vieram ontem.", True), "pt", None, s, None, marks=5, secret=False)
     assert "¦" in systems[0] and "um a cada 2 palavras" in systems[0] and "Reorganize" in systems[0]
     assert "¦" not in p.out and p.marks == 2 and p.lost == []
     systems.clear()
-    d.process_piece(d.Piece("Foram 10 alunos.", True), "pt", None, s, None, marks=0, logic=False)
+    d.process_piece(d.Piece("Foram 10 alunos.", True), "pt", None, s, None, marks=0, logic=False, secret=False)
     assert "¦" not in systems[0] and "Reorganize" not in systems[0]
+
+
+def test_vault_round_trip_and_api_never_sees_data():
+    import random
+    md = "O IBGE contou 103,5 milhões de pessoas em 2026, segundo o Banco Central (Silva, 2023). Veja [a série](https://x.org/a)."
+    v = d.Vault(random.Random(1))
+    enc = v.encode(md, d.known_names(md))
+    for secret in ("IBGE", "103,5", "2026", "Banco Central", "Silva", "https://x.org/a"):
+        assert secret not in enc
+    assert d.Vault  # códigos têm forma {Xab}
+    assert all(d._CODE.fullmatch(c) for c in v.back)
+    back, lost = v.decode(enc)
+    assert back == md and lost == []
+
+
+def test_sigilo_end_to_end_writer_sees_only_codes():
+    seen = []
+    def red(u):
+        seen.append(u)
+        codes = re.findall(r"\{[NELC][mf]?[a-z]{2}\}", u)
+        return "Texto novo com " + " e ".join(codes) + "."
+    import re
+    m = Fake(redator=red)
+    p = d.process_piece(d.Piece("Em 2023, o IBGE contou 42 escolas (Silva, 2020).", True), "pt", None, m, None,
+                        names={"IBGE"})
+    assert "2023" not in seen[0] and "IBGE" not in seen[0] and "Silva" not in seen[0]
+    assert "2023" in p.out and "IBGE" in p.out and "(Silva, 2020)" in p.out and p.lost == []
+
+
+def test_sigilo_lost_code_reported_and_retry_uses_codes_only():
+    calls = []
+    def red(u):
+        calls.append(u)
+        return "Texto sem os códigos."
+    m = Fake(redator=red)
+    p = d.process_piece(d.Piece("O IBGE contou 42 escolas.", True), "pt", None, m, None, names={"IBGE"})
+    assert len(calls) == 2 and "42" not in calls[1] and "IBGE" not in calls[1]
+    assert "42" in p.lost and "IBGE" in p.lost

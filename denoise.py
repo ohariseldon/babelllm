@@ -14,6 +14,8 @@ Por trecho (até ~150 palavras, sem cruzar títulos), em uma chamada só:
 O redator também reorganiza a lógica do parágrafo (ordem das ideias, junta e
 divide frases), contra marcas de nível de frase ou de sentido que ainda não
 conhecemos (--manter-logica desliga).
+Sigilo (padrão): números, nomes, siglas, links e citações vão ao modelo como
+códigos com chave ({Nxy}, {Exy}...) e são destrocados no fim; a API não vê os dados.
 Opcional: --notas provedor:modelo (notas feitas por LLM, reescrita mais funda),
 --revisao provedor:modelo (mais um passe de correção) e --marcadores N: o último
 modelo escreve com N marcadores "¦" a cada 10 palavras e o script os apaga. Cada
@@ -53,7 +55,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 # ---------------------------------------------------------------- Unicode
 
@@ -334,6 +336,9 @@ PROMPTS = {
         "secao": "Seção: {h}\n\n", "faltou": "\n\nInclua também: {x}",
         "logica": (" Reorganize a lógica do parágrafo: mude a ordem das ideias, junte ou divida frases, inverta "
                    "causa e efeito ou geral e exemplo quando o sentido permitir."),
+        "codigos": (" Os códigos entre chaves ({N..} número, {E..} nome ou sigla, {Em..} masculino, {Ef..} feminino, "
+                    "{L..} link, {C..} citação) são opacos: use cada um exatamente uma vez, copiado igual, "
+                    "sem traduzir, explicar ou inventar códigos."),
         "marcas": (" Enquanto escreve, insira o símbolo ¦ entre palavras, em média um a cada {k} palavras, "
                    "espalhado também no meio das frases. Ele será apagado depois; não o explique."),
     },
@@ -348,6 +353,8 @@ PROMPTS = {
         "secao": "Section: {h}\n\n", "faltou": "\n\nAlso include: {x}",
         "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, swap "
                    "cause and effect or general and example where the meaning allows."),
+        "codigos": (" The codes in braces ({N..} number, {E..} name or acronym, {L..} link, {C..} citation) are "
+                    "opaque: use each exactly once, copied verbatim, never translate, explain or invent codes."),
         "marcas": (" While writing, insert the symbol ¦ between words, on average once every {k} words, spread "
                    "inside sentences too. It will be deleted afterwards; do not explain it."),
     },
@@ -532,71 +539,181 @@ def strip_marks(text: str) -> tuple[str, int, float]:
     return clean, n, (covered / total if total else 0.0)
 
 
+# ---------------------------------------------------------------- sigilo
+
+_ART_M = {"o", "os", "do", "dos", "no", "nos", "ao", "aos", "pelo", "pelos", "um", "the"}
+_ART_F = {"a", "as", "da", "das", "na", "nas", "à", "às", "pela", "pelas", "uma"}
+_LINK = re.compile(r"\[[^\]\n]{1,200}\]\([^)\s]+\)")
+_URL = re.compile(r"https?://[^\s)\]]+")
+_CITE = re.compile(r"\([A-ZÀ-Ú][^()\n]{0,60}?\d{4}[a-z]?\)|\[\d+(?:[,–-]\s*\d+)*\]")
+_NUM = re.compile(r"(?<![{\w])(?:R\$\s?|US\$\s?)?\d+(?:[.,]\d+)*(?:\s?%)?")
+_CAP = r"[A-ZÀ-Ý][\wÀ-ÿ'’-]*"
+_NAME = re.compile(r"(?<![{\w])" + _CAP + r"(?: (?:de |da |do |dos |das |of |the )?" + _CAP + r")*")
+_CODE = re.compile(r"\{[NELC][mf]?[a-z]{2}\}")
+_SENT_START = re.compile(r"(?:^|[.!?:;]\s+|\n\s*(?:[-*+>]\s+|\d+[.)]\s+|\*+)?|\*+|[(\"«“—–|·]\s*)$")
+
+
+_COMMON_CAPS = set("""antes depois quem quando onde como hoje ainda nas nos essa esse isso ela ele eles elas não sim
+    mas porém próximo próxima quantidade página mapa painel análises acontecimentos benefícios diagnóstico observado
+    dado dados taxa fonte nota tabela gráfico figura when where who however after before then there this these""".split())
+
+
+def known_names(md: str) -> set[str]:
+    """Nomes próprios e siglas do documento: palavras com maiúscula no meio de frase que
+    nunca aparecem em minúscula no texto (isso descarta "Em", "A", "Ela" etc.)."""
+    lower = {w for w in re.findall(r"[\wÀ-ÿ'’-]+", md) if w.islower()}
+    names = set()
+    for m in _NAME.finditer(md):
+        words = m.group(0).split(" ")
+        names.update(x for x in words if len(x) > 1 and x.isupper())
+        if not _SENT_START.search(md[max(0, m.start() - 6):m.start()]):
+            names.add(words[0])
+    common = _DROP["pt"] | _DROP["en"] | _COMMON_CAPS
+    return {n for n in names if len(n) > 1 and (n.isupper() or (n.lower() not in lower and n.lower() not in common))}
+
+
+class Vault:
+    """Troca números, nomes, siglas, links e citações por códigos opacos com chave aleatória.
+
+    O modelo só vê {Nxy}, {Exy}, {Lxy}, {Cxy}: não sabe os valores, não faz conta nem
+    "corrige" fatos, e a API nunca recebe os dados reais. O script destroca no fim."""
+
+    def __init__(self, rng):
+        self.rng, self.fwd, self.back = rng, {}, {}
+
+    def _code(self, kind: str, value: str) -> str:
+        if value in self.fwd:
+            return self.fwd[value]
+        while True:
+            c = "{" + kind + "".join(self.rng.choice("abcdefghijkmnpqrstuvwxyz") for _ in range(2)) + "}"
+            if c not in self.back:
+                break
+        self.fwd[value], self.back[c] = c, value
+        return c
+
+    def encode(self, text: str, names: set[str]) -> str:
+        text = _LINK.sub(lambda m: self._code("L", m.group(0)), text)
+        text = _URL.sub(lambda m: self._code("L", m.group(0)), text)
+        text = _CITE.sub(lambda m: self._code("C", m.group(0)), text)
+        text = _NUM.sub(lambda m: self._code("N", m.group(0)), text)
+
+        def name(m):
+            words = m.group(0).split(" ")
+            ok = lambda x: x in names or (len(x) > 1 and x.isupper())
+            i = next((k for k, x in enumerate(words) if ok(x)), None)
+            if i is None:
+                return m.group(0)
+            lead, w = " ".join(words[:i]), " ".join(words[i:])
+            prev = (text[:m.start()] + " " + lead).split()[-1:] or [""]
+            return (lead + " " if lead else "") + self._one(w, prev[0])
+
+        return _NAME.sub(name, text)
+
+    def _one(self, w: str, prev: str) -> str:
+        if w in self.fwd:
+            return self.fwd[w]
+        g = "m" if prev.lower() in _ART_M else "f" if prev.lower() in _ART_F else ""
+        return self._code("E" + g, w)
+
+
+    def decode(self, text: str) -> tuple[str, list[str]]:
+        """Destroca. Devolve (texto, códigos que o modelo perdeu)."""
+        seen = set()
+
+        def back(m):
+            c = m.group(0)
+            if c in self.back:
+                seen.add(c)
+                return self.back[c]
+            # gênero trocado pelo modelo ({Em..} escrito como {E..}): procura pelas letras
+            for k, v in self.back.items():
+                if k[-3:] == c[-3:] and k[1] == c[1]:
+                    seen.add(k)
+                    return v
+            return ""
+        text = _CODE.sub(back, text)
+        return re.sub(r"[ \t]{2,}", " ", text), [c for c in self.back if c not in seen]
+
+
 # ---------------------------------------------------------------- motor
 
 def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revisao: Model | None,
-                  marks: float = 0.0, logic: bool = True) -> Piece:
-    """``marks`` = marcadores por 10 palavras (0 desliga). O último modelo a escrever os insere."""
+                  marks: float = 0.0, logic: bool = True, secret: bool = True, names: set[str] | None = None,
+                  rng=None) -> Piece:
+    """``marks`` = marcadores por 10 palavras (0 desliga). O último modelo a escrever os insere.
+    ``secret``: números, nomes, links e citações vão ao modelo como códigos e voltam no fim."""
     P = PROMPTS[lang]
     head = P["secao"].format(h=p.heading) if p.heading else ""
     need = must_keep(p.text)
+    vault = Vault(rng or _rng) if secret else None
+    src = vault.encode(p.text, names or set()) if vault else p.text
+    codes_rule = P["codigos"] if vault and vault.back else ""
     mark_rule = P["marcas"].format(k=max(1, round(10 / marks))) if marks > 0 else ""
-    w_sys = P["redator"] + (P["logica"] if logic else "") + ("" if revisao else mark_rule)
-    r_sys = P["revisao"] + mark_rule
+    w_sys = P["redator"] + (P["logica"] if logic else "") + codes_rule + ("" if revisao else mark_rule)
+    r_sys = P["revisao"] + codes_rule + mark_rule
 
-    def clean(s: str) -> str:
+    def clean(s: str) -> tuple[str, str, list[str]]:
+        """(texto ainda codificado, texto final, o que faltou na forma que pode ir à API)."""
         s, n, cov = strip_marks(_tidy(s))
         p.marks, p.coverage = n, cov
-        return s
+        if vault is None:
+            return s, s, missing(need, s)
+        final, lost_codes = vault.decode(s)
+        return s, final, lost_codes
 
     try:
         if notas is None:
-            notes = local_notes(p.text, lang)
+            notes = local_notes(src, lang)
         else:
-            notes = notas(P["notas"], head + p.text, max_tokens=64 + len(p.text.split()) * 2)
+            notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
-        draft = clean(redator(w_sys, head + notes, max_tokens=cap))
-        lost = missing(need, draft)
+        coded, draft, lost = clean(redator(w_sys, head + notes, max_tokens=cap))
         if lost:
             st = (p.marks, p.coverage)
-            retry = clean(redator(w_sys, head + notes + P["faltou"].format(x="; ".join(lost)), max_tokens=cap))
-            if len(missing(need, retry)) < len(lost):
-                draft, lost = retry, missing(need, retry)
+            c2, retry, lost2 = clean(redator(w_sys, head + notes + P["faltou"].format(x="; ".join(lost)), max_tokens=cap))
+            if len(lost2) < len(lost):
+                coded, draft, lost = c2, retry, lost2
             else:
                 p.marks, p.coverage = st
         out = draft
         if revisao is not None:
             p.marks, p.coverage = 0, 0.0
-            fixed = clean(revisao(r_sys, draft, max_tokens=cap))
-            if fixed and len(missing(need, fixed)) <= len(lost) and len(fixed.split()) > 0.6 * len(draft.split()):
-                out = fixed
+            _, fixed, lost3 = clean(revisao(r_sys, coded, max_tokens=cap))
+            if fixed and len(lost3) <= len(lost) and len(fixed.split()) > 0.6 * len(draft.split()):
+                out, lost = fixed, lost3
             else:  # ficou a versão do redator, que não tinha marcadores
                 p.marks, p.coverage = 0, 0.0
-        p.out, p.lost = out, missing(need, out)
+        p.out = out
+        p.lost = missing(need, out) + ([vault.back[c] for c in lost if vault.back[c] not in need] if vault else [])
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
         p.out = p.text
     return p
 
 
+_rng = __import__("random").SystemRandom()
+
+
 def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | None, revisao: Model | None,
         jobs: int, max_words: int, fmt: str | None, only_clean: bool, lang_opt: str,
-        marks: float = 0.0, logic: bool = True) -> dict:
+        marks: float = 0.0, logic: bool = True, secret: bool = True) -> dict:
     outdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     docs = []
     for f in files:
         md, nzw = strip_invisible(read_any(f))
         lang = lang_opt if lang_opt != "auto" else detect_lang(md)
-        docs.append({"src": f, "md": md, "lang": lang, "invisiveis": nzw, "pieces": make_pieces(md, max_words)})
+        docs.append({"src": f, "md": md, "lang": lang, "invisiveis": nzw, "pieces": make_pieces(md, max_words),
+                     "names": known_names(md) if secret else set()})
 
     if not only_clean:
-        todo = [(p, d["lang"]) for d in docs for p in d["pieces"] if p.rewrite]
+        todo = [(p, d["lang"], d["names"]) for d in docs for p in d["pieces"] if p.rewrite]
         if not jobs:  # API: tudo de uma vez. Ollama atende poucos pedidos por vez (OLLAMA_NUM_PARALLEL).
             local = any(m is not None and m.provider == "ollama" for m in (notas, redator, revisao))
             jobs = 8 if local else max(1, min(256, len(todo)))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic) for p, lang in todo]
+            futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic, secret, names)
+                    for p, lang, names in todo]
             done = 0
             for fu in futs:
                 fu.result()
@@ -663,6 +780,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
                          "quanto mais, melhor a remoção da marca do próprio redator, e pior a fluidez). Padrão: 0")
+    ap.add_argument("--sem-sigilo", action="store_true",
+                    help="manda números, nomes, links e citações em claro (padrão: vão como códigos com chave)")
     ap.add_argument("--manter-logica", action="store_true",
                     help="não pede ao redator para reorganizar a ordem das ideias e das frases")
     ap.add_argument("--base-url", help="endpoint para provedor compat/openai (OpenRouter, Groq, LM Studio...)")
@@ -690,7 +809,7 @@ def main(argv: list[str] | None = None) -> int:
     files = expand(a.entradas)
     rep = run(files, Path(a.saida), notas, redator, revisao, a.paralelo, a.palavras,
               "." + a.formato if a.formato else None, a.so_limpar, a.idioma,
-              max(0.0, min(10.0, a.marcadores)), not a.manter_logica)
+              max(0.0, min(10.0, a.marcadores)), not a.manter_logica, not a.sem_sigilo)
     for f in rep["arquivos"]:
         flag = " ERRO" if f["trechos_com_erro"] else ""
         lost = f" perdeu: {', '.join(f['itens_perdidos'][:5])}" if f["itens_perdidos"] else ""
