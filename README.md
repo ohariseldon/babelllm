@@ -57,7 +57,8 @@ use `--marcadores` (abaixo).
 
 Para cada trecho de até ~150 palavras (títulos, código e tabelas não são tocados):
 
-1. **Limpeza**: saem caracteres invisíveis (largura zero, tags Unicode, bidi, seletores de variação) e,
+1. **Limpeza**: saem caracteres invisíveis (largura zero, tags Unicode, bidi, seletores de variação), letras
+   cirílicas ou gregas disfarçadas de latinas e,
    nos `.docx` gravados, autor, datas e partes C2PA.
 2. **Sigilo** (padrão): números, nomes próprios, siglas, links e citações viram códigos com chave
    aleatória. O modelo não sabe os valores, não faz conta e não "corrige" fatos.
@@ -67,7 +68,10 @@ Para cada trecho de até ~150 palavras (títulos, código e tabelas não são to
    para as notas), reescreve mais longe do original, mas erra mais a relação entre fatos.
 4. **Conferência**: todo código precisa voltar, e cada número precisa ficar na frase do seu ano. Se faltar
    algum código, o redator recebe só o que faltou (o código, nunca o dado); se um par número-ano se separou,
-   o trecho é refeito uma vez. O que ainda falhar aparece no relatório.
+   o trecho é refeito uma vez. Uma checagem local de sentido (negação e direção: sobe/desce, antes/depois,
+   todos/nenhum) compara cada frase com a da saída que tem os mesmos códigos e manda refazer o trecho que
+   inverteu. Com `--verificar provedor:modelo`, um juiz também compara original e reescrita, os dois
+   codificados. O que ainda falhar aparece no relatório.
 5. **Destroca** local dos códigos e gravação.
 
 Todos os trechos de todos os arquivos vão ao mesmo tempo, em conexões persistentes. Ao receber 429, o
@@ -95,6 +99,7 @@ A volta é exata. Custa fluidez.
 | `--sigilo basico\|nomes\|forte\|nao` | o que vai como código para a API (padrão `basico`; `nomes` deixa os números em claro) |
 | `--manter-logica` | não reorganiza ideias nem troca sinônimos |
 | `--notas prosa\|local\|provedor:modelo` | o que o redator recebe: o texto codificado (padrão, o mais fiel), notas locais ou notas de um modelo |
+| `--verificar provedor:modelo` | juiz que confere o sentido de cada trecho e manda refazer o que inverteu (~1 chamada a mais por trecho) |
 | `--revisao provedor:modelo` | um passe extra de correção depois do redator |
 | `--rpm N` | teto de pedidos por minuto (ex.: 15 no plano grátis do Gemini) |
 | `-j N` | chamadas simultâneas (padrão: todos os trechos, até 256; Ollama: 8) |

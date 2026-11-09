@@ -67,10 +67,35 @@ _INVISIBLE = re.compile(
 _ODD_SPACE = re.compile("[   -   　]")
 
 
+_HOMO = {"а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y", "і": "i", "ј": "j", "һ": "h",
+         "ѕ": "s", "ԁ": "d", "ɡ": "g", "ο": "o", "α": "a", "ν": "v", "ρ": "p",
+         "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T",
+         "Х": "X", "Ѕ": "S", "І": "I", "Α": "A", "Β": "B", "Ε": "E", "Η": "H", "Κ": "K", "Μ": "M", "Ν": "N",
+         "Ο": "O", "Ρ": "P", "Τ": "T", "Χ": "X"}
+_HOMO_WORD = re.compile(r"\w*[" + "".join(_HOMO) + r"]\w*")
+
+
+def _fold_homoglyphs(text: str) -> tuple[str, int]:
+    """Troca letras cirílicas/gregas parecidas com latinas, só em palavras que misturam alfabetos
+    (texto grego ou russo de verdade fica como está)."""
+    n = 0
+
+    def fix(m):
+        nonlocal n
+        w = m.group(0)
+        if not re.search(r"[A-Za-zÀ-ÿ]", w):
+            return w
+        n += sum(c in _HOMO for c in w)
+        return "".join(_HOMO.get(c, c) for c in w)
+    return _HOMO_WORD.sub(fix, text), n
+
+
 def strip_invisible(text: str) -> tuple[str, int]:
-    """Remove invisíveis (largura zero, tags, bidi, seletores...) e espaços exóticos."""
+    """Remove invisíveis (largura zero, tags, bidi, seletores...), espaços exóticos e letras disfarçadas."""
     n = len(_INVISIBLE.findall(text)) + len(_ODD_SPACE.findall(text))
     text = _ODD_SPACE.sub(" ", _INVISIBLE.sub("", text))
+    text, h = _fold_homoglyphs(text)
+    n += h
     text = "".join(c for c in text if unicodedata.category(c) != "Cf" or c in "\n\t")
     return unicodedata.normalize("NFC", text), n
 
@@ -253,6 +278,7 @@ class Piece:
     coverage: float = 0.0
     wrap: str = ""
     patterns: int = 0
+    meaning: list[str] = field(default_factory=list)
 
 
 _WRAP = re.compile(r"^(\*{1,2}|_)(?![*_\s])([^*\n]+?)(?<![*_\s])\1$")
@@ -361,6 +387,14 @@ PROMPTS = {
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
         "tamanho": "\n\n(cerca de {n} palavras)",
+        "sentido": "\n\nAtenção, numa versão anterior estas frases mudaram de sentido; mantenha a direção (sobe/desce, "
+                   "sim/não, antes/depois) exatamente como no original: {x}",
+        "juiz": ("Você compara um ORIGINAL com uma REESCRITA. Os códigos entre chaves são opacos. Liste, uma por linha, "
+                 "cada frase do original que a reescrita contradiz (sentido invertido, número ou ano trocado de papel, "
+                 "quem fez o quê trocado, causa inventada) ou omite. Paráfrase com outras palavras e outra ordem não é "
+                 "problema. Antes de apontar, pergunte: as duas podem ser verdade ao mesmo tempo? Se nada estiver "
+                 "errado, responda só OK."),
+        "juiz_user": "ORIGINAL:\n{a}\n\nREESCRITA:\n{b}",
         "pares": "\n\nAtenção: cada número fica na mesma frase do seu ano, sem outro número entre eles: {x}.",
         "reparo": ("Neste texto faltam alguns itens. Insira cada um deles uma vez, no lugar que a nota indica, "
                    "mudando o mínimo possível do resto. Mantenha todos os códigos entre chaves já presentes. "
@@ -408,6 +442,13 @@ PROMPTS = {
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
         "tamanho": "\n\n(about {n} words)",
+        "sentido": "\n\nCareful, in an earlier version these sentences changed meaning; keep the direction (up/down, "
+                   "yes/no, before/after) exactly as in the original: {x}",
+        "juiz": ("You compare an ORIGINAL with a REWRITE. Brace codes are opaque. List, one per line, each original "
+                 "sentence the rewrite contradicts (meaning reversed, number or year in the wrong role, who did what "
+                 "swapped, invented cause) or leaves out. Paraphrase in other words and order is fine. Before flagging, "
+                 "ask: could both be true at the same time? If nothing is wrong, reply only OK."),
+        "juiz_user": "ORIGINAL:\n{a}\n\nREWRITE:\n{b}",
         "pares": "\n\nCareful: each number stays in the same sentence as its year, no other number between them: {x}.",
         "reparo": ("Some items are missing from this text. Insert each one once, where its note places it, changing "
                    "as little else as possible. Keep every brace code already present. Reply with the full corrected text only."),
@@ -908,6 +949,64 @@ def ai_patterns(text: str, lang: str) -> int:
     return len(_AI_PAT[lang].findall(text))
 
 
+# Checagem de sentido sem modelo (ideia do NegEx: pseudo-negação vem antes da negação).
+_NEG = {"pt": {"não", "nao", "nunca", "jamais", "nenhum", "nenhuma", "nada", "ninguém", "sem", "nem"},
+        "en": {"not", "no", "never", "none", "nothing", "nobody", "without", "nor", "cannot"}}
+_PSEUDO = {"pt": [("não", "só"), ("não", "apenas"), ("não", "somente"), ("não", "necessariamente"),
+                  ("não", "mais", "só"), ("nem", "sempre"), ("sem", "dúvida")],
+           "en": [("not", "only"), ("not", "just"), ("not", "merely"), ("not", "necessarily"), ("no", "longer", "just")]}
+_SIDES = {"pt": [
+    ({"subiu", "subiram", "sobe", "sobem", "subir", "aumentou", "aumentaram", "aumenta", "aumento", "cresceu",
+      "cresceram", "cresce", "crescem", "crescimento", "alta", "avançou", "avanço", "mais", "maior", "maiores", "acima",
+      "superou", "ganhou", "recorde"},
+     {"caiu", "caíram", "cai", "caem", "cair", "diminuiu", "diminuíram", "diminui", "queda", "recuou", "recuo",
+      "encolheu", "baixa", "menos", "menor", "menores", "abaixo", "perdeu", "redução", "reduziu", "desce", "descer",
+      "despencou", "declínio"}),
+    ({"antes", "anterior", "precedeu"}, {"depois", "posterior", "após", "seguiu"}),
+    ({"todos", "todas", "sempre", "tudo"}, {"nenhum", "nenhuma", "nunca", "nada"}),
+    ({"aprovou", "aprovado", "permitido", "venceu"}, {"rejeitou", "rejeitado", "proibido", "perdeu"})],
+    "en": [
+    ({"rose", "rise", "rises", "increased", "increase", "grew", "growth", "up", "higher", "more", "above", "gained",
+      "record", "climbed", "surged"},
+     {"fell", "fall", "falls", "decreased", "decrease", "shrank", "decline", "declined", "down", "lower", "less",
+      "fewer", "below", "lost", "dropped", "sank"}),
+    ({"before", "earlier", "prior"}, {"after", "later", "subsequent"}),
+    ({"all", "always", "everything"}, {"none", "never", "nothing"}),
+    ({"approved", "allowed", "won"}, {"rejected", "forbidden", "lost"})]}
+
+
+def _polarity(sent: str, lang: str) -> tuple[bool, tuple[int, ...]]:
+    toks = re.findall(r"[a-zà-ÿ]+", sent.lower())
+    masked = [False] * len(toks)
+    for i in range(len(toks)):
+        for ph in _PSEUDO[lang]:
+            if toks[i:i + len(ph)] == list(ph):
+                for j in range(i, i + len(ph)):
+                    masked[j] = True
+    neg = sum(1 for i, t in enumerate(toks) if not masked[i] and t in _NEG[lang]) % 2 == 1
+    bag = {t for i, t in enumerate(toks) if not masked[i]}
+    sides = tuple(3 if (bag & a and bag & b) else 1 if bag & a else 2 if bag & b else 0 for a, b in _SIDES[lang])
+    return neg, sides
+
+
+def flipped_claims(src: str, out: str, lang: str) -> list[str]:
+    """Frases do original cuja direção mudou na saída. O alinhamento é pelos códigos: a frase da saída que
+    contém todos os códigos da frase original é a mesma afirmação. Sem código, a frase não é checada."""
+    split = lambda t: [x for x in re.split(r"(?<=[.!?;])\s+", t) if x.strip()]
+    outs, bad = split(out), []
+    for s in split(src):
+        codes = set(_CODE.findall(s))
+        if not codes:
+            continue
+        hits = [o for o in outs if codes <= set(_CODE.findall(o))]
+        if len(hits) != 1:
+            continue
+        (sn, ss), (on, os_) = _polarity(s, lang), _polarity(hits[0], lang)
+        if sn != on or any(a in (1, 2) and b in (1, 2) and a != b for a, b in zip(ss, os_)):
+            bad.append(s)
+    return bad
+
+
 def _no_heads(s: str, heading: str) -> str:
     """Tira títulos que o modelo ecoou: linhas com #, «Seção:» e cópias do título da seção."""
     key = lambda x: re.sub(r"[\W_]+", " ", x).strip().lower()
@@ -921,7 +1020,7 @@ def _no_heads(s: str, heading: str) -> str:
 
 def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revisao: Model | None,
                   marks: float = 0.0, logic: bool = True, secret: bool = True, names: set[str] | None = None,
-                  rng=None) -> Piece:
+                  rng=None, verify=None) -> Piece:
     """``marks`` = marcadores por 10 palavras (0 desliga). O último modelo a escrever os insere.
     ``secret``: números, nomes, links e citações vão ao modelo como códigos e voltam no fim."""
     P = PROMPTS[lang]
@@ -992,6 +1091,21 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                 coded, draft, lost = c2, retry, lost2
             else:
                 p.marks, p.coverage = st
+        flips = flipped_claims(src, coded, lang) if vault else []
+        issues = list(flips)
+        if verify is not None and vault:  # juiz opcional: compara original e saída, ambos ainda codificados
+            issues += judge(verify, src, coded, lang)
+        if issues:  # sentido invertido ou contradição: refaz uma vez, dizendo o que conferir
+            st = (p.marks, p.coverage)
+            hint = P["sentido"].format(x=" | ".join(issues[:4]))
+            c2, d2, l2 = clean(redator(w_sys, head + notes + size + hint, max_tokens=cap))
+            f2 = flipped_claims(src, c2, lang)
+            i2 = f2 + (judge(verify, src, c2, lang) if verify is not None else [])
+            if len(i2) < len(issues) and len(l2) <= len(lost) and len(broken_pairs(pairs, c2)) <= len(bad):
+                coded, draft, lost, flips, issues = c2, d2, l2, f2, i2
+            else:
+                p.marks, p.coverage = st
+        p.meaning = [vault.decode(x)[0] for x in issues] if vault else []
         out = draft
         if revisao is not None:
             p.marks, p.coverage = 0, 0.0
@@ -1012,7 +1126,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         if vault and pairs:
             bad = broken_pairs(pairs, coded)
             extra += [f"(par trocado: {vault.back[n]} / {vault.back[a]})" for n, a in bad]
-        p.lost = miss + extra
+        p.lost = miss + extra + [f"(sentido a conferir: {x[:90]})" for x in p.meaning]
         p.patterns = ai_patterns(out, lang)
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
@@ -1020,12 +1134,26 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
     return p
 
 
+def judge(model, src: str, out: str, lang: str) -> list[str]:
+    """Pergunta a um modelo se a reescrita contradiz ou omite algo do original. Devolve as frases do
+    original com problema (vazio = ok). Os dois textos vão codificados: o juiz não vê os dados."""
+    P = PROMPTS[lang]
+    try:
+        r = model(P["juiz"], P["juiz_user"].format(a=src, b=out), max_tokens=200)
+    except Exception:  # noqa: BLE001 - o juiz é opcional; se falhar, segue
+        return []
+    lines = [l.strip(" -*•\t") for l in r.strip().splitlines() if l.strip()]
+    if not lines or lines[0].upper().startswith("OK"):
+        return []
+    return [l for l in lines if l.upper() not in {"PROBLEMAS:", "PROBLEMS:"}][:4]
+
+
 _rng = __import__("random").SystemRandom()
 
 
 def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | None, revisao: Model | None,
         jobs: int, max_words: int, fmt: str | None, only_clean: bool, lang_opt: str,
-        marks: float = 0.0, logic: bool = True, secret: bool | str = True) -> dict:
+        marks: float = 0.0, logic: bool = True, secret: bool | str = True, verify=None) -> dict:
     outdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     docs = []
@@ -1041,7 +1169,8 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
             local = any(m is not None and not isinstance(m, str) and m.provider == "ollama" for m in (notas, redator, revisao))
             jobs = 8 if local else max(1, min(256, len(todo)))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic, secret, names)
+            futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic, secret, names,
+                                None, verify)
                     for p, lang, names in todo]
             done = 0
             for fu in futs:
@@ -1077,7 +1206,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
         })
     report["segundos"] = round(time.time() - t0, 2)
     seen = {}
-    for m in (notas, redator, revisao):
+    for m in (notas, redator, revisao, verify):
         if m is not None and not isinstance(m, str) and id(m.usage) not in seen:
             seen[id(m.usage)] = (m.spec, m.usage)
     report["uso"] = [{"modelo": s, "chamadas": u.calls, "tokens_entrada": u.tin, "tokens_saida": u.tout}
@@ -1108,6 +1237,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="o que o redator recebe: 'prosa' (padrão: o texto codificado inteiro, o mais fiel), "
                          "'local' (notas sem LLM: reescrita mais distante, erra mais a relação entre fatos) "
                          "ou provedor:modelo")
+    ap.add_argument("--verificar", metavar="provedor:modelo",
+                    help="juiz opcional que compara original e reescrita (ambos codificados) e manda refazer o "
+                         "trecho que mudou de sentido; ~1 chamada a mais por trecho")
     ap.add_argument("--revisao", help="modelo de uma revisão extra depois do redator (padrão: nenhuma)")
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
@@ -1134,7 +1266,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--relatorio", help="grava o relatório JSON neste arquivo")
     a = ap.parse_args(argv)
 
-    notas = redator = revisao = None
+    notas = redator = revisao = verify = None
     if not a.so_limpar:
         spec = a.redator or a.modelo
         if not spec:
@@ -1144,12 +1276,18 @@ def main(argv: list[str] | None = None) -> int:
         redator = mk(spec)
         notas = None if a.notas.lower() == "local" else "prosa" if a.notas.lower() == "prosa" else mk(a.notas)
         revisao = mk(a.revisao) if a.revisao and a.revisao.lower() not in {"nao", "não", "no", "off"} else None
+        verify = mk(a.verificar) if a.verificar else None
+        last = revisao or redator
+        if last.provider in ("anthropic", "gemini") or (last.provider == "openai" and "gpt" in last.spec):
+            print(f"aviso: {last.spec} é de um fornecedor que pode marcar o texto que escreve. A marca de origem sai, "
+                  "mas a do redator entra. Prefira um modelo local (ollama:...) ou use --marcadores.", file=sys.stderr)
 
     files = expand(a.entradas)
     rep = run(files, Path(a.saida), notas, redator, revisao, a.paralelo, a.palavras,
               "." + a.formato if a.formato else None, a.so_limpar, a.idioma,
               max(0.0, min(10.0, a.marcadores)), not a.manter_logica,
-              False if (a.sem_sigilo or a.sigilo == "nao") else (a.sigilo if a.sigilo in ("forte", "nomes") else True))
+              False if (a.sem_sigilo or a.sigilo == "nao") else (a.sigilo if a.sigilo in ("forte", "nomes") else True),
+              verify)
     for f in rep["arquivos"]:
         flag = " ERRO" if f["trechos_com_erro"] else ""
         lost = f" perdeu: {', '.join(f['itens_perdidos'][:5])}" if f["itens_perdidos"] else ""

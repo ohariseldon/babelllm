@@ -363,3 +363,36 @@ def test_structure_recipe_is_drawn_and_ai_patterns_counted():
     assert "sorteada" in seen[0] and "'não é X, é Y'" in seen[0]
     assert d.ai_patterns("Não é só crise, é mudança. Juros, câmbio e inflação.", "pt") == 2
     assert d.ai_patterns("A inflação subiu em outubro.", "pt") == 0
+
+
+def test_flipped_claims_aligned_by_codes():
+    src = "A taxa {Nab} subiu em {Acd}. O {Emef} não aprovou a lei."
+    assert d.flipped_claims(src, "Em {Acd}, a taxa {Nab} caiu. A lei não passou no {Emef}.", "pt") == [
+        "A taxa {Nab} subiu em {Acd}."]
+    assert d.flipped_claims(src, "Em {Acd} a taxa {Nab} cresceu. O {Emef} não aprovou a lei.", "pt") == []
+    # pseudo-negação: "não só" não inverte
+    assert d.flipped_claims("O {Eab} cresceu.", "O {Eab} não só cresceu, mas acelerou.", "pt") == []
+
+
+def test_meaning_retry_and_judge():
+    outs = iter(["A taxa {X} caiu em {Y}.", "A taxa {X} subiu em {Y}."])
+    import random
+    calls = []
+    def red(u):
+        calls.append(u)
+        t = next(outs)
+        codes = re.findall(r"\{[NA][a-z]{2}\}", u)
+        return t.replace("{X}", codes[0]).replace("{Y}", codes[1])
+    p = d.process_piece(d.Piece("A taxa 5% subiu em 2020.", True), "pt", None, Fake(redator=red), None,
+                        rng=random.Random(3))
+    assert p.out == "A taxa 5% subiu em 2020." and len(calls) == 2 and "mudaram de sentido" in calls[1]
+    class J:
+        def __call__(self, system, user, max_tokens=0):
+            return "OK" if "subiu" in user.split("REESCRITA:")[1] else "- A taxa subiu"
+    assert d.judge(J(), "A taxa {Nab} subiu.", "A taxa {Nab} subiu.", "pt") == []
+    assert d.judge(J(), "A taxa {Nab} subiu.", "A taxa {Nab} caiu.", "pt") == ["A taxa subiu"]
+
+
+def test_homoglyphs_folded_only_in_mixed_words():
+    t, n = d.strip_invisible("O Bаnco subiu. Россия fica.")
+    assert t == "O Banco subiu. Россия fica." and n == 1
