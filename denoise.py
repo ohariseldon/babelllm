@@ -391,6 +391,10 @@ PROMPTS = {
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
+        "lista": (" O texto é uma lista: reescreva cada item numa linha própria, começando com a mesma marca [n], "
+                  "na mesma ordem e com a mesma quantidade de itens; não junte itens nem faça parágrafo. Se o item começa "
+                  "com um título em negrito (**...**), mantenha um título curto em negrito no começo."),
+        "lista_de_novo": "\n\nAtenção: devolva exatamente uma linha por item, cada uma começando com [n].",
         "tamanho": "\n\n(cerca de {n} palavras; frases com média de {f} palavras, misturando curtas de 5 a 8 com "
                     "longas de 20 a 25)",
         "sentido": "\n\nAtenção, numa versão anterior estas frases mudaram de sentido; mantenha a direção (sobe/desce, "
@@ -448,6 +452,10 @@ PROMPTS = {
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
+        "lista": (" The text is a list: rewrite each item on its own line, starting with the same [n] tag, in the same "
+                  "order and the same number of items; never merge items or make a paragraph. If an item opens with a bold "
+                  "title (**...**), keep a short bold title at its start."),
+        "lista_de_novo": "\n\nCareful: return exactly one line per item, each starting with [n].",
         "tamanho": "\n\n(about {n} words; sentences averaging {f} words, mixing short ones of 5 to 8 with long "
                     "ones of 20 to 25)",
         "sentido": "\n\nCareful, in an earlier version these sentences changed meaning; keep the direction (up/down, "
@@ -1104,7 +1112,27 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
         size = P["tamanho"].format(n=len(p.text.split()), f=_mean_sent(p.text))
-        coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
+        src_lines = src.strip().splitlines()
+        is_list = len(src_lines) >= 2 and all(_LIST_LINE.match(l) for l in src_lines)
+        if is_list:  # cada item vai marcado [n] e volta no lugar dele; a lista nunca vira parágrafo
+            bullets = [_LIST_LINE.match(l).group(0) for l in src_lines]
+            notes = "\n".join(f"[{i + 1}] {l[len(b):]}" for i, (l, b) in enumerate(zip(src_lines, bullets)))
+            w_sys += P["lista"]
+
+            def relist(t: str) -> str | None:
+                items = {int(m.group(1)): m.group(2).strip() for m in re.finditer(r"^\s*(?:[-*]\s*)?\[(\d+)\]\s*(.+)$", t, re.M)}
+                if sorted(items) != list(range(1, len(bullets) + 1)):
+                    return None
+                return "\n".join(b + items[i + 1] for i, b in enumerate(bullets))
+
+            raw = redator(w_sys, head + notes, max_tokens=cap)
+            fixed = relist(raw) or relist(redator(w_sys, head + notes + P["lista_de_novo"], max_tokens=cap))
+            if fixed is None:  # não voltou item por item: fica a lista original (pouco texto, pouca marca)
+                p.out, p.lost = p.text, ["(lista mantida como estava)"]
+                return p
+            coded, draft, lost = clean(fixed)
+        else:
+            coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
         pairs = code_pairs(src) if vault else []
         bad = broken_pairs(pairs, coded)
         if bad:  # número trocado de ano: refaz uma vez, avisando quais pares andam juntos

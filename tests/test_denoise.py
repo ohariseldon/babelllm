@@ -418,3 +418,18 @@ def test_list_block_is_own_piece_and_units_get_de():
     v.encode("Colheu 14,3 milhões em 2020.", set())
     c = v.fwd["14,3 milhões"]
     assert v.decode(f"Foram {c} toneladas.")[0] == "Foram 14,3 milhões de toneladas."
+
+
+def test_list_items_come_back_in_place_or_original_kept():
+    class Cap(Fake):
+        def __init__(self, reply):
+            super().__init__(); self.reply = reply
+        def __call__(self, system, user, max_tokens=0):
+            return self.reply(user)
+    lst = "- **Nascimentos.** Caem desde o pico.\n- **Óbitos.** Sobem com a idade."
+    ok = Cap(lambda u: "[2] Os óbitos crescem com o envelhecimento.\n[1] Os nascimentos recuam desde o pico.")
+    p = d.process_piece(d.Piece(lst, True), "pt", "prosa", ok, None, secret=False)
+    assert p.out == "- Os nascimentos recuam desde o pico.\n- Os óbitos crescem com o envelhecimento."
+    bad = Cap(lambda u: "Um parágrafo só, juntando tudo.")
+    p = d.process_piece(d.Piece(lst, True), "pt", "prosa", bad, None, secret=False)
+    assert p.out == lst and p.lost == ["(lista mantida como estava)"]
