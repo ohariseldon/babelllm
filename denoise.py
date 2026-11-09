@@ -509,33 +509,37 @@ class Model:
                 hint = resp.getheader("retry-after") or (re.findall(r'retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)s', msg) or [0])[0]
                 wait = float(hint or 0) or min(1.5 * 2 ** attempt, 60)
                 if resp.status == 429:
-                    self.limiter.slow_down()
-                time.sleep(min(wait + 0.5, 90))
+                    self.limiter.pause(min(wait, 90))
+                else:
+                    time.sleep(min(wait + 0.5, 90))
                 continue
             raise RuntimeError(f"{self.spec}: HTTP {resp.status}: {msg[:300]}")
         raise RuntimeError(f"{self.spec}: sem resposta")
 
 
 class Limiter:
-    """Teto de pedidos por minuto, compartilhado entre as threads de um modelo.
-    Com rpm=0 não limita até a API devolver 429; aí passa a espaçar os pedidos sozinho."""
+    """Ritmo dos pedidos de um modelo, compartilhado entre as threads.
+
+    ``rpm`` > 0 espaça os pedidos (ex.: 15 no plano grátis do Gemini). Ao receber 429,
+    todas as threads param pelo tempo que a API pediu e depois voltam ao ritmo normal:
+    não há redução permanente."""
 
     def __init__(self, rpm: float = 0):
-        self.lock, self.next, self.rpm = threading.Lock(), 0.0, rpm
+        self.lock, self.next, self.rpm, self.until = threading.Lock(), 0.0, rpm, 0.0
 
     def wait(self):
-        if not self.rpm:
-            return
         with self.lock:
             now = time.monotonic()
-            at = max(now, self.next)
-            self.next = at + 60.0 / self.rpm
+            at = max(now, self.until)
+            if self.rpm:
+                at = max(at, self.next)
+                self.next = at + 60.0 / self.rpm
         if at > now:
             time.sleep(at - now)
 
-    def slow_down(self):
+    def pause(self, seconds: float):
         with self.lock:
-            self.rpm = max(2.0, (self.rpm or 120.0) * 0.7)
+            self.until = max(self.until, time.monotonic() + seconds)
 
 
 _local = threading.local()

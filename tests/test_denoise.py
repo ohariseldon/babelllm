@@ -189,3 +189,12 @@ def test_sigilo_forte_hides_direction_and_round_trips():
     for w in ("subiu", "caiu", "não", "rose", "fell"):
         assert w not in enc
     assert v.decode(enc) == (md, [])
+
+
+def test_limiter_pause_recovers():
+    import time as _t
+    lim = d.Limiter()
+    lim.pause(0.2)
+    t0 = _t.monotonic(); lim.wait(); first = _t.monotonic() - t0
+    t0 = _t.monotonic(); lim.wait(); second = _t.monotonic() - t0
+    assert first >= 0.15 and second < 0.05
