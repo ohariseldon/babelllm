@@ -359,12 +359,14 @@ PROMPTS = {
                    "sem mudar quem fez o quê nem a que dado cada número se refere. Troque por sinônimos ou outra formulação "
                    "pelo menos metade das palavras de conteúdo das notas (substantivos, verbos, adjetivos), "
                    "menos os termos técnicos."),
-        "codigos": (" Os códigos entre chaves (N número, A ano, E nome ou sigla, Em masculino, Ef feminino, "
-                    "L link, C citação, P palavra de sentido oculto) são opacos: use cada um exatamente "
-                    "uma vez, copiado igual, sem traduzir, explicar ou inventar códigos. Cada código fica preso às "
-                    "palavras vizinhas da nota: 'em' + ano continua sendo o ano daquele dado. Nome Em/Ef leva artigo "
-                    "como substantivo (o, do, no / a, da, na). Um código P ocupa o lugar de uma "
-                    "palavra só e mantém a função dela na nota (verbo continua verbo, advérbio continua advérbio)."),
+        "codigos": (" Os códigos entre chaves ({k}) são opacos: use cada um exatamente uma vez, copiado igual, "
+                    "sem traduzir, explicar ou inventar códigos. Mantenha as preposições da nota em volta de cada "
+                    "código ('de', 'em', 'desde'): 'em' + ano continua sendo o ano daquele dado. Não repita depois "
+                    "do código a unidade que ele já contém."),
+        "tipos": {"N": "N número, com a unidade se houver", "A": "A ano", "E": "E nome ou sigla",
+                  "Em": "Em nome masculino: leva artigo (o, do, no)", "Ef": "Ef nome feminino: leva artigo (a, da, na)",
+                  "L": "L link", "C": "C citação",
+                  "P": "P palavra de sentido oculto: ocupa o lugar de uma palavra só e mantém a função dela"},
         "marcas": (" Enquanto escreve, insira o símbolo ¦ entre palavras, em média um a cada {k} palavras, "
                    "espalhado também no meio das frases. Ele será apagado depois; não o explique."),
     },
@@ -385,9 +387,11 @@ PROMPTS = {
         "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, "
                    "without changing who did what or which fact each number belongs to. Replace at least half of the notes' "
                    "content words (nouns, verbs, adjectives) with synonyms or other phrasing, except technical terms."),
-        "codigos": (" The codes in braces (N number, A year, E name or acronym, L link, C citation, P hidden word) are "
-                    "opaque: use each exactly once, copied verbatim, never translate, explain or invent codes. Each "
-                    "code stays tied to its neighbor words in the note: 'in' + year is still the year of that fact."),
+        "codigos": (" The codes in braces ({k}) are opaque: use each exactly once, copied verbatim, never translate, "
+                    "explain or invent codes. Keep the note's prepositions around each code: 'in' + year is still the "
+                    "year of that fact. Do not repeat after a code the unit it already holds."),
+        "tipos": {"N": "N number, with its unit if any", "A": "A year", "E": "E name or acronym", "Em": "E name",
+                  "Ef": "E name", "L": "L link", "C": "C citation", "P": "P hidden word, one word, same role"},
         "marcas": (" While writing, insert the symbol ¦ between words, on average once every {k} words, spread "
                    "inside sentences too. It will be deleted afterwards; do not explain it."),
     },
@@ -409,6 +413,9 @@ _DROP = {
 _KEEP_TOKEN = re.compile(r"https?://\S+|\[[\d,–\- ]+\]|\([^()]{0,60}?\d{4}[a-z]?\)|\S+")
 
 
+_GLUE = {"de", "do", "da", "dos", "das", "em", "no", "na", "of", "in"}
+
+
 def local_notes(text: str, lang: str) -> str:
     """Notas sem LLM: uma linha por frase, só palavras de conteúdo, números e citações intactos."""
     drop, blocks = _DROP[lang], []
@@ -421,7 +428,8 @@ def local_notes(text: str, lang: str) -> str:
                 toks = _KEEP_TOKEN.findall(sent)
                 words = [w for i, w in enumerate(toks)
                          if w.startswith(("(", "[", "http", "{")) or w.lower().strip(".,;:!?—–-\"“”'") not in drop
-                         or (i + 1 < len(toks) and toks[i + 1].startswith("{"))]
+                         or (i + 1 < len(toks) and toks[i + 1].startswith("{"))
+                         or (i > 0 and toks[i - 1].rstrip(".,;:").endswith("}") and w.lower() in _GLUE)]
                 words = [w.strip(".,;:!?—–\"“”") if not w.startswith(("(", "[")) else w for w in words]
                 words = [w for w in words if w]
                 if words:
@@ -706,6 +714,7 @@ class Vault:
 
     def __init__(self, rng, strong: bool = False, numbers: bool = True):
         self.rng, self.fwd, self.back, self.strong, self.numbers = rng, {}, {}, strong, numbers
+        self.lang, self.fake = "pt", 0
 
     def _code(self, kind: str, value: str) -> str:
         if value in self.fwd:
@@ -746,6 +755,13 @@ class Vault:
         return self._code("E" + g, w)
 
 
+    _PREP = {"em", "de", "desde", "até", "a", "e", "ou", "entre", "para", "após", "antes", "partir", "ano", "anos",
+             "no", "do", "dos", "da", "in", "of", "since", "until", "by", "from", "to", "and", "or", "year", "como"}
+
+    def _prev_ok(self, text, m) -> bool:
+        prev = re.findall(r"[\wÀ-ÿ{}%]+", text[:m.start()])[-1:]
+        return not prev or prev[0].lower() in self._PREP or self.lang != "pt"
+
     def decode(self, text: str) -> tuple[str, list[str]]:
         """Destroca. Devolve (texto, códigos que o modelo perdeu)."""
         seen = set()
@@ -767,8 +783,17 @@ class Vault:
             new = {"de": {"m": "do", "f": "da"}, "em": {"m": "no", "f": "na"}, "por": {"m": "pelo", "f": "pela"}}[w.lower()][g]
             return (new.capitalize() if w[0].isupper() else new) + " " + c
         text = re.sub(r"(?<![\wÀ-ÿ])([Dd]e|[Ee]m|[Pp]or) (\{E[mf][a-z]{2}\})", contract, text)
+        def unit(m):  # "{N..} anos" quando o código já é "29 anos"
+            c, after = m.group(1), m.group(2)
+            v = self.back.get(c, "")
+            return c if v.split()[-1:] == [after] else m.group(0)
+        text = re.sub(r"(\{N[a-z]{2}\})\s+([\wÀ-ÿ%]+)(?![\wÀ-ÿ])", unit, text)
+        text = re.sub(r"(?<=[\wÀ-ÿ}%]) (\{A[a-z]{2}\})(?=[.,;:)]|$)",
+                      lambda m: m.group(0) if self._prev_ok(text, m) else " em " + m.group(1), text)
         text = _CODE.sub(back, text)
+        self.fake = len(_FAKE_CODE.findall(text))
         text = _FAKE_CODE.sub("", text)
+        text = re.sub(r"(?<![\wÀ-ÿ])[NA](?=(?:1[5-9]|20)\d\d(?!\d))", "", text)  # "A1970": prefixo de código imitado
         text = re.sub(r"\{([^{}\n]{1,60})\}", r"\1", text)  # {Palavra} que o modelo inventou: tira as chaves
         text = re.sub(r" +([,.;:!?)])", r"\1", re.sub(r"[ \t]{2,}", " ", text))
         return text, [c for c in self.back if c not in seen]
@@ -796,8 +821,17 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
     head = P["secao"].format(h=p.heading) if p.heading else ""
     need = must_keep(p.text)
     vault = Vault(rng or _rng, strong=(secret == "forte"), numbers=(secret != "nomes")) if secret else None
+    if vault:
+        vault.lang = lang
     src = vault.encode(p.text, names or set()) if vault else p.text
-    codes_rule = P["codigos"] if vault and vault.back else ""
+    codes_rule = ""
+    if vault and vault.back:
+        kinds = []
+        for c in vault.back:
+            k = c[1:3] if c[1] == "E" and len(c) == 6 else c[1]
+            if P["tipos"][k] not in kinds:
+                kinds.append(P["tipos"][k])
+        codes_rule = P["codigos"].format(k="; ".join(kinds))
     mark_rule = P["marcas"].format(k=max(1, round(10 / marks))) if marks > 0 else ""
     w_sys = P["redator"] + (P["logica"] if logic else "") + codes_rule + ("" if revisao else mark_rule)
     r_sys = P["revisao"] + codes_rule + mark_rule
@@ -842,7 +876,9 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         if p.wrap:
             out = p.wrap + " ".join(out.split()) + p.wrap
         p.out = out
-        p.lost = missing(need, out) + ([vault.back[c] for c in lost if vault.back[c] not in need] if vault else [])
+        if vault and vault.fake:
+            lost = lost + ["(palavra trocada por um código inventado)"]
+        p.lost = missing(need, out) + ([vault.back.get(c, c) for c in lost if vault.back.get(c, c) not in need] if vault else [])
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
         p.out = p.wrap + p.text + p.wrap

@@ -265,3 +265,25 @@ def test_number_with_unit_is_one_code_and_nomes_mode_keeps_numbers():
 def test_model_meta_notes_are_removed():
     s = "Texto bom.\n\n---\n**Nota:** O item 1996 não tem lugar marcado."
     assert d._no_heads(s, "") == "Texto bom."
+
+
+def test_decode_fixes_repeated_unit_missing_em_and_stray_prefix():
+    import random
+    v = d.Vault(random.Random(5))
+    enc = v.encode("O menor número em 29 anos. Chegou a 93,1 milhões em 1970.", set())
+    n29 = v.fwd["29 anos"]; n93 = v.fwd["93,1 milhões"]; a70 = v.fwd["1970"]
+    out, lost = v.decode(f"O menor em {n29} anos. Atingiu {n93} {a70}. Em A1940 havia menos.")
+    assert out == "O menor em 29 anos. Atingiu 93,1 milhões em 1970. Em 1940 havia menos." and lost == []
+
+
+def test_codes_rule_lists_only_present_kinds():
+    seen = []
+    def red(u):
+        return u
+    class Cap(Fake):
+        def __call__(self, system, user, max_tokens=0):
+            seen.append(system)
+            return super().__call__(system, user, max_tokens)
+    m = Cap(redator=red)
+    d.process_piece(d.Piece("O IBGE contou 42 escolas.", True), "pt", None, m, None, names={"IBGE"})
+    assert " P palavra" not in seen[0] and "A ano" not in seen[0] and "N número" in seen[0]
