@@ -355,6 +355,7 @@ PROMPTS = {
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
         "tamanho": "\n\n(cerca de {n} palavras)",
+        "pares": "\n\nAtenção: cada número fica na mesma frase do seu ano, sem outro número entre eles: {x}.",
         "reparo": ("Neste texto faltam alguns itens. Insira cada um deles uma vez, no lugar que a nota indica, "
                    "mudando o mínimo possível do resto. Mantenha todos os códigos entre chaves já presentes. "
                    "Responda só com o texto completo corrigido."),
@@ -385,6 +386,7 @@ PROMPTS = {
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
         "tamanho": "\n\n(about {n} words)",
+        "pares": "\n\nCareful: each number stays in the same sentence as its year, no other number between them: {x}.",
         "reparo": ("Some items are missing from this text. Insert each one once, where its note places it, changing "
                    "as little else as possible. Keep every brace code already present. Reply with the full corrected text only."),
         "reparo_user": "Missing items: {x}\n\nNotes where they appear:\n{n}\n\nText:\n{t}",
@@ -722,7 +724,7 @@ class Vault:
 
     def __init__(self, rng, strong: bool = False, numbers: bool = True):
         self.rng, self.fwd, self.back, self.strong, self.numbers = rng, {}, {}, strong, numbers
-        self.lang, self.fake = "pt", 0
+        self.lang, self.fake, self.de_after = "pt", 0, set()
 
     def _code(self, kind: str, value: str) -> str:
         if value in self.fwd:
@@ -738,6 +740,7 @@ class Vault:
         text = _LINK.sub(lambda m: self._code("L", m.group(0)), text)
         text = _URL.sub(lambda m: self._code("L", m.group(0)), text)
         text = _CITE.sub(lambda m: self._code("C", m.group(0)), text)
+        self.src_text = text
         if self.numbers:
             text = _NUM.sub(lambda m: self._code("A" if _YEAR.fullmatch(m.group(0)) else "N", m.group(0)), text)
 
@@ -752,6 +755,9 @@ class Vault:
             return (lead + " " if lead else "") + self._one(w, prev[0])
 
         text = _NAME.sub(name, text)
+        for c in self.back:  # números seguidos de "de" no original ("2,39 milhões de brasileiros")
+            if c[1] == "N" and re.search(re.escape(c) + r" de ", text):
+                self.de_after.add(c)
         if self.strong:  # cada forma ("subiu", "Subiu") vira um código próprio: a volta é exata
             text = _POL.sub(lambda m: self._code("P", m.group(0)), text)
         return text
@@ -801,8 +807,8 @@ class Vault:
         def de(m):
             c, nxt = m.group(1), m.group(2)
             v = self.back.get(c, "")
-            if self.lang == "pt" and re.search(r"(?:mil|milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões))$", v) \
-                    and nxt.lower() not in _NOT_NOUN:
+            if self.lang == "pt" and c in self.de_after and nxt.lower() not in _NOT_NOUN \
+                    and not re.search(r"(?:ad|id)[oa]s$", nxt.lower()):
                 return f"{c} de {nxt}"
             return m.group(0)
         text = re.sub(r"(\{N[a-z]{2}\}) ([a-zà-ú]+s)(?![\wÀ-ÿ])", de, text)
@@ -816,6 +822,39 @@ class Vault:
 
 
 # ---------------------------------------------------------------- motor
+
+_PAIR_GAP = 3
+
+
+def code_pairs(coded: str) -> list[tuple[str, str]]:
+    """Pares número→ano do original: '{N..} em {A..}' com até 3 palavras entre eles e nenhum outro código."""
+    toks = re.findall(r"\{[NAELCP][mf]?[a-z]{2}\}|[\wÀ-ÿ%]+|[.!?;]", coded)
+    pairs = []
+    for i, t in enumerate(toks):
+        if t.startswith("{N"):
+            for j in range(i + 1, min(len(toks), i + 2 + _PAIR_GAP)):
+                if toks[j] in ".!?;" or (toks[j].startswith("{") and not toks[j].startswith("{A")):
+                    break
+                if toks[j].startswith("{A"):
+                    pairs.append((t, toks[j]))
+                    break
+    return pairs
+
+
+def broken_pairs(pairs: list[tuple[str, str]], coded: str) -> list[tuple[str, str]]:
+    """Pares que a saída separou: os dois códigos precisam estar na mesma frase, sem outro número ou ano entre eles."""
+    bad = []
+    for n, a in pairs:
+        ok = False
+        for sent in re.split(r"(?<=[.!?;])\s+", coded):
+            if n in sent and a in sent:
+                i, j = sorted((sent.index(n), sent.index(a)))
+                ok = not re.search(r"\{[NA][a-z]{2}\}", sent[i + 5:j])
+                break
+        if not ok:
+            bad.append((n, a))
+    return bad
+
 
 def _no_heads(s: str, heading: str) -> str:
     """Tira títulos que o modelo ecoou: linhas com #, «Seção:» e cópias do título da seção."""
@@ -869,6 +908,17 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
         size = P["tamanho"].format(n=len(p.text.split()))
         coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
+        pairs = code_pairs(src) if vault else []
+        bad = broken_pairs(pairs, coded)
+        if bad:  # número trocado de ano: refaz uma vez, avisando quais pares andam juntos
+            hint = P["pares"].format(x="; ".join(f"{n} com {a}" if lang == "pt" else f"{n} with {a}" for n, a in bad))
+            st = (p.marks, p.coverage)
+            c2, d2, l2 = clean(redator(w_sys, head + notes + size + hint, max_tokens=cap))
+            b2 = broken_pairs(pairs, c2)
+            if len(b2) < len(bad) and len(l2) <= len(lost):
+                coded, draft, lost, bad = c2, d2, l2, b2
+            else:
+                p.marks, p.coverage = st
         for _ in range(2 if lost else 0):  # reparo: o redator insere só o que faltou, no texto que já escreveu
             if not lost:
                 break
@@ -900,6 +950,9 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         extra = [vault.back.get(c, c) for c in lost] if vault else []
         extra = [v for v in extra if v.startswith("(") and "código inventado" in v or not (
             _norm(v) in _norm(out) or any(m in v for m in miss))]
+        if vault and pairs:
+            bad = broken_pairs(pairs, coded)
+            extra += [f"(par trocado: {vault.back[n]} / {vault.back[a]})" for n, a in bad]
         p.lost = miss + extra
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)

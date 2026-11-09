@@ -301,3 +301,28 @@ def test_decode_inserts_de_between_scale_number_and_noun():
 def test_short_italic_note_untouched():
     ps = d.make_pieces("Texto comum do artigo com várias palavras aqui.\n\n*Estimado a partir dos óbitos de 2019.*", 150)
     assert ps[-1].text == "*Estimado a partir dos óbitos de 2019.*" and not ps[-1].rewrite
+
+
+def test_de_only_when_source_had_it_and_not_before_participle():
+    import random
+    v = d.Vault(random.Random(7))
+    v.encode("Foram 2,32 milhões de bebês e 817 mil crianças a menos.", set())
+    a, b = v.fwd["2,32 milhões"], v.fwd["817 mil"]
+    out, _ = v.decode(f"Os {a} observados e os {a} bebês; {b} crianças.")
+    assert out == "Os 2,32 milhões observados e os 2,32 milhões de bebês; 817 mil crianças."
+
+
+def test_pair_check_catches_swapped_years_and_retry_fixes():
+    import random
+    v = d.Vault(random.Random(8))
+    src = v.encode("Foi de 2,43 milhões em 2019 para 2,12 milhões em 2024.", set())
+    pairs = d.code_pairs(src)
+    n1, n2, y1, y2 = v.fwd["2,43 milhões"], v.fwd["2,12 milhões"], v.fwd["2019"], v.fwd["2024"]
+    assert pairs == [(n1, y1), (n2, y2)]
+    assert d.broken_pairs(pairs, f"Em {y2} eram {n1}, contra {n2} em {y1}.") != []
+    assert d.broken_pairs(pairs, f"Em {y1} eram {n1}; em {y2}, {n2}.") == []
+    outs = iter([f"Em {y2} eram {n1}, contra {n2} em {y1}.", f"Em {y1} eram {n1}; em {y2}, {n2}."])
+    m = Fake(redator=lambda u: next(outs))
+    p = d.process_piece(d.Piece("Foi de 2,43 milhões em 2019 para 2,12 milhões em 2024.", True), "pt", None, m, None,
+                        rng=random.Random(8))
+    assert "2019 eram 2,43 milhões" in p.out and not any("par trocado" in x for x in p.lost)
