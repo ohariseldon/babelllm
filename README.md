@@ -6,7 +6,7 @@
 
 Você escreve com ajuda de IA e assume isso. O que você não quer é o carimbo invisível que alguns
 fornecedores embutem na escolha das palavras (marcas do tipo SynthID). O babelllm reescreve cada
-trecho a partir de notas, com um modelo que você escolhe (local, antigo ou barato), e entrega o mesmo
+trecho com um modelo que você escolhe (local, antigo ou barato), e entrega o mesmo
 conteúdo, com os mesmos números, sem a sequência de palavras que carrega a marca.
 
 - **Um arquivo só**, biblioteca padrão do Python, sem dependências obrigatórias.
@@ -61,13 +61,14 @@ Para cada trecho de até ~150 palavras (títulos, código e tabelas não são to
    nos `.docx` gravados, autor, datas e partes C2PA.
 2. **Sigilo** (padrão): números, nomes próprios, siglas, links e citações viram códigos com chave
    aleatória. O modelo não sabe os valores, não faz conta e não "corrige" fatos.
-3. **Notas locais**, sem modelo: cada frase vira só as palavras de conteúdo. Saem artigos, preposições e
-   muletas ("vale ressaltar"); ficam negação e conectivos lógicos.
-4. **Redator**: o modelo escreve o trecho do zero a partir das notas, sem ver a prosa original. Ele também
-   reorganiza a ordem das ideias e troca por sinônimos pelo menos metade das palavras de conteúdo.
-5. **Conferência**: todo código precisa voltar. Se faltar algum, o redator recebe só o que faltou (o código,
-   nunca o dado) e insere no próprio texto. O que ainda faltar aparece no relatório.
-6. **Destroca** local dos códigos e gravação.
+3. **Redator**: o modelo reescreve o trecho codificado com outras palavras e outra construção de frase,
+   reorganiza a ordem das ideias e troca por sinônimos pelo menos metade das palavras de conteúdo, mantendo
+   as mesmas relações entre os fatos. Com `--notas local`, ele recebe só as palavras de conteúdo (sem modelo
+   para as notas), reescreve mais longe do original, mas erra mais a relação entre fatos.
+4. **Conferência**: todo código precisa voltar, e cada número precisa ficar na frase do seu ano. Se faltar
+   algum código, o redator recebe só o que faltou (o código, nunca o dado); se um par número-ano se separou,
+   o trecho é refeito uma vez. O que ainda falhar aparece no relatório.
+5. **Destroca** local dos códigos e gravação.
 
 Todos os trechos de todos os arquivos vão ao mesmo tempo, em conexões persistentes. Ao receber 429, o
 script pausa pelo tempo que a API pede e retoma.
@@ -93,7 +94,7 @@ A volta é exata. Custa fluidez.
 | `--marcadores N` | 0 a 10 marcadores removíveis por 10 palavras (padrão 0) |
 | `--sigilo basico\|nomes\|forte\|nao` | o que vai como código para a API (padrão `basico`; `nomes` deixa os números em claro) |
 | `--manter-logica` | não reorganiza ideias nem troca sinônimos |
-| `--notas provedor:modelo` | notas feitas por um modelo em vez de locais (reescrita mais funda, ~2× o custo) |
+| `--notas prosa\|local\|provedor:modelo` | o que o redator recebe: o texto codificado (padrão, o mais fiel), notas locais ou notas de um modelo |
 | `--revisao provedor:modelo` | um passe extra de correção depois do redator |
 | `--rpm N` | teto de pedidos por minuto (ex.: 15 no plano grátis do Gemini) |
 | `-j N` | chamadas simultâneas (padrão: todos os trechos, até 256; Ollama: 8) |
@@ -115,9 +116,10 @@ de uma marca, ninguém pode afirmar isso.
 
 Medidos em 20 artigos reais em português (~1.500 palavras cada), com Claude Haiku 4.5:
 
-- **Tempo**: 20 artigos em 38 s, sem erros de API (o script se ajusta ao limite de pedidos simultâneos).
+- **Tempo**: 20 artigos em ~44 s, sem erros de API (o script se ajusta ao limite de pedidos simultâneos).
 - **Tokens**: ~177 mil de entrada e ~59 mil de saída nos 20 artigos.
-- **Fidelidade**: no artigo de demografia, conferido à mão, os ~30 números saíram com o valor, a unidade e o ano certos.
+- **Fidelidade**: no artigo de demografia, conferido à mão, os ~30 números saíram com o valor, a unidade e o ano
+  certos, e as relações entre eles (a mais, a menos, sobe, desce, um em cada nove) também.
 
 **Teste de marca d'água com chave própria** (`bench/marca_teste.py`): marcamos o artigo escolhendo, para cada
 frase, a paráfrase com mais palavras "verdes" (o princípio do SynthID), e medimos o z-score antes e depois.
@@ -142,8 +144,8 @@ Para medir só o tempo sem gastar tokens: `bench/mock_server.py` simula uma API 
   olham o estilo, e o texto de saída é escrito por um modelo. O babelllm remove marcas d'água, não a
   aparência de texto de IA.
 - **Marcas que não dependem de contexto** (lista verde fixa) caem menos que as de contexto.
-- **Marcas futuras**: não há como testar contra o que ainda não foi publicado. O desenho (notas sem a
-  prosa, códigos, reorganização, sinônimos, marcadores) ataca os mecanismos conhecidos, não garante o resto.
+- **Marcas futuras**: não há como testar contra o que ainda não foi publicado. O desenho (códigos, reorganização, sinônimos,
+  marcadores, opcionalmente notas sem a prosa) ataca os mecanismos conhecidos, não garante o resto.
 - **Qualidade**: os números voltam certos, mas um modelo pequeno às vezes muda a relação entre os fatos
   (quem fez o quê, causa e consequência) em uma ou duas frases por artigo, e tende a escrever mais formal.
   Confira os `itens_perdidos` e **leia o texto antes de publicar**. Um redator melhor ou `--revisao` reduzem isso.
@@ -174,8 +176,9 @@ in batch, using any cheap model you choose (local Ollama, OpenAI, Anthropic, Gem
 endpoint). It is a single stdlib-only Python file.
 
 For each ~150-word chunk it strips invisible Unicode and file metadata, replaces numbers, names, acronyms,
-links and citations with keyed codes (the API never sees them), builds local content-word notes, and has the
-writer model rewrite the chunk from the notes only, reordering ideas and swapping synonyms. Codes are verified
+links and citations with keyed codes (the API never sees them), and has the writer
+model paraphrase the coded chunk, reordering ideas and swapping synonyms (`--notas local` sends content-word
+notes only). Codes are verified
 and restored locally. Optional removable markers (`--marcadores N`) break the context window of the writer's
 own watermark. Measured: 20 real articles in 38 s with Claude Haiku 4.5, no errors; an own-key watermark went
 from z ≈ 4 to |z| < 2 on every window tested. Read the output before publishing: small writers can still

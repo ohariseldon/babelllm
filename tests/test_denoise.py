@@ -341,3 +341,11 @@ def test_prosa_mode_sends_coded_prose_not_notes():
             return super().__call__(system, user, max_tokens)
     p = d.process_piece(d.Piece("Foram 817 mil crianças a menos em 2024.", True), "pt", "prosa", Cap(redator=red), None)
     assert "a menos" in seen[0] and "817" not in seen[0] and p.out == "Reescrito."
+
+
+def test_stray_braces_removed_when_source_had_none():
+    import random
+    v = d.Vault(random.Random(9))
+    enc = v.encode("O IBGE estimou.", {"IBGE"})
+    c = re.search(r"\{E[mf]?[a-z]{2}\}", enc).group(0)
+    assert v.decode(f"As estimativas do {c}}} saíram.")[0] == "As estimativas do IBGE saíram."

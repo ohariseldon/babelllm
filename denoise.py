@@ -354,7 +354,8 @@ PROMPTS = {
         "redator_prosa": ("Reescreva em português do Brasil, como prosa de artigo, o texto abaixo com outras palavras "
                           "e outra construção de frase, dizendo exatamente o mesmo: mesmos fatos, mesmas relações entre "
                           "eles (quem, quanto, quando, a mais ou a menos, causa), sem acrescentar nada. Frases de "
-                          "tamanhos variados, sem clichês de IA, tom sóbrio, sem títulos. Só o texto."),
+                          "tamanhos variados, sem clichês de IA, tom sóbrio, sem títulos, sem alongar: mesmo tamanho ou menor. "
+                          "Só o texto."),
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
@@ -388,7 +389,8 @@ PROMPTS = {
                     "length close to the one asked. No headings. Text only."),
         "redator_prosa": ("Rewrite the English text below in other words and other sentence structure, saying exactly "
                           "the same: same facts, same relations between them (who, how much, when, more or less, cause), "
-                          "adding nothing. Varied sentence length, no AI stock phrases, plain tone, no headings. Text only."),
+                          "adding nothing. Varied sentence length, no AI stock phrases, plain tone, no headings, no longer than the "
+                          "original. Text only."),
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
@@ -744,6 +746,7 @@ class Vault:
         return c
 
     def encode(self, text: str, names: set[str]) -> str:
+        self.braces = "{" in text or "}" in text
         text = _LINK.sub(lambda m: self._code("L", m.group(0)), text)
         text = _URL.sub(lambda m: self._code("L", m.group(0)), text)
         text = _CITE.sub(lambda m: self._code("C", m.group(0)), text)
@@ -824,6 +827,8 @@ class Vault:
         text = _FAKE_CODE.sub("", text)
         text = re.sub(r"(?<![\wÀ-ÿ])[NA](?=(?:1[5-9]|20)\d\d(?!\d))", "", text)  # "A1970": prefixo de código imitado
         text = re.sub(r"\{([^{}\n]{1,60})\}", r"\1", text)  # {Palavra} que o modelo inventou: tira as chaves
+        if not getattr(self, "braces", True):  # o original não tinha chaves: as que sobraram são do modelo
+            text = text.replace("{", "").replace("}", "")
         text = re.sub(r" +([,.;:!?)])", r"\1", re.sub(r"[ \t]{2,}", " ", text))
         return text, [c for c in self.back if c not in seen]
 
@@ -1053,9 +1058,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-o", "--saida", default="limpos", help="pasta de saída (padrão: limpos/)")
     ap.add_argument("-m", "--modelo", help="modelo redator (provedor:modelo); é o último a escrever")
     ap.add_argument("--redator", help="sinônimo de -m")
-    ap.add_argument("--notas", default="local",
-                    help="o que o redator recebe: 'local' (padrão: notas sem LLM, grátis), 'prosa' (o texto "
-                         "codificado inteiro, mais fiel em artigos com muitos números) ou provedor:modelo")
+    ap.add_argument("--notas", default="prosa",
+                    help="o que o redator recebe: 'prosa' (padrão: o texto codificado inteiro, o mais fiel), "
+                         "'local' (notas sem LLM: reescrita mais distante, erra mais a relação entre fatos) "
+                         "ou provedor:modelo")
     ap.add_argument("--revisao", help="modelo de uma revisão extra depois do redator (padrão: nenhuma)")
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
