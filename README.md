@@ -13,6 +13,9 @@ OPENAI_API_KEY=... python denoise.py artigos/ -o limpos/ -m openai:gpt-4o-mini
 # modelo local (o mais seguro contra marca; roda 8 trechos por vez)
 python denoise.py artigos/ -o limpos/ -m ollama:qwen2.5:7b-instruct
 
+# Gemini (chave em GEMINI_API_KEY)
+GEMINI_API_KEY=... python denoise.py artigos/ -o limpos/ -m gemini:gemini-2.5-flash
+
 # Claude antigo, OpenRouter/Groq/LM Studio (qualquer endpoint compatível com OpenAI)
 ANTHROPIC_API_KEY=... python denoise.py artigos/ -m anthropic:claude-3-haiku-20240307
 LLM_API_KEY=... python denoise.py artigos/ -m compat:meta-llama/llama-3.1-8b-instruct --base-url https://openrouter.ai/api/v1

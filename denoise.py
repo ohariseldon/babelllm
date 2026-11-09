@@ -407,7 +407,7 @@ class Usage:
 @dataclass
 class Model:
     """``spec`` = provedor:modelo, ex.: openai:gpt-4o-mini, ollama:qwen2.5:7b-instruct,
-    anthropic:claude-3-haiku-20240307, compat:meu-modelo (com --base-url)."""
+    anthropic:claude-3-haiku-20240307, gemini:gemini-2.5-flash, compat:meu-modelo (com --base-url)."""
     spec: str
     base_url: str | None = None
     temperature: float | None = None
@@ -417,18 +417,22 @@ class Model:
     def __post_init__(self):
         self.provider, _, self.name = self.spec.partition(":")
         self.provider = self.provider.lower()
-        if self.provider not in {"openai", "ollama", "anthropic", "compat"} or not self.name:
+        if self.provider not in {"openai", "ollama", "anthropic", "gemini", "compat"} or not self.name:
             raise SystemExit(f"modelo inválido: {self.spec!r} (use provedor:modelo)")
         if self.provider == "anthropic":
             self.url = (self.base_url or os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com") + "/v1/messages"
             self.key = os.environ.get("ANTHROPIC_API_KEY", "")
         else:
-            default = {"openai": "https://api.openai.com/v1", "ollama": "http://localhost:11434/v1"}.get(self.provider)
-            base = self.base_url or (os.environ.get("OPENAI_BASE_URL") if self.provider != "ollama" else None) or default
+            default = {"openai": "https://api.openai.com/v1", "ollama": "http://localhost:11434/v1",
+                       "gemini": "https://generativelanguage.googleapis.com/v1beta/openai"}.get(self.provider)
+            base = self.base_url or (os.environ.get("OPENAI_BASE_URL") if self.provider in {"openai", "compat"} else None) or default
             if not base:
                 raise SystemExit("compat precisa de --base-url")
             self.url = base.rstrip("/") + "/chat/completions"
-            self.key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or "local"
+            if self.provider == "gemini":
+                self.key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
+            else:
+                self.key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or "local"
 
     def __call__(self, system: str, user: str, max_tokens: int = 2048) -> str:
         if self.provider == "anthropic":

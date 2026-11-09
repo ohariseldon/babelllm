@@ -104,6 +104,8 @@ def test_model_spec_parsing():
     assert m.name == "qwen2.5:7b-instruct" and m.url.startswith("http://localhost:11434")
     a = d.Model("anthropic:claude-3-haiku-20240307")
     assert a.url.endswith("/v1/messages")
+    g = d.Model("gemini:gemini-2.5-flash")
+    assert g.url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 
 
 def test_local_notes_drop_glue_keep_facts():
