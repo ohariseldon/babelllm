@@ -1,3 +1,4 @@
+import re
 import io, sys, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -162,7 +163,7 @@ def test_sigilo_end_to_end_writer_sees_only_codes():
     seen = []
     def red(u):
         seen.append(u)
-        codes = re.findall(r"\{[NELC][mf]?[a-z]{2}\}", u)
+        codes = re.findall(r"\{[NAELC][mf]?[a-z]{2}\}", u)
         return "Texto novo com " + " e ".join(codes) + "."
     import re
     m = Fake(redator=red)
@@ -211,3 +212,56 @@ def test_gate_halves_on_concurrency_error_and_recovers():
     for _ in range(40):
         g.success()
     assert g.limit == 30
+
+
+def test_year_and_quantity_codes_keep_their_slot_in_notes():
+    import random
+    v = d.Vault(random.Random(1))
+    enc = v.encode("O Brasil chegou a 93,1 milhões em 1970.", {"Brasil"})
+    assert "93,1" not in enc and "1970" not in enc
+    assert re.search(r"\{N[a-z]{2}\} em \{A[a-z]{2}\}", enc)
+    notes = d.local_notes(enc, "pt")
+    assert re.search(r"em \{A[a-z]{2}\}", notes) and re.search(r"[Oo] \{Em[a-z]{2}\}", notes)
+
+
+def test_decode_contracts_article_and_drops_fake_codes():
+    import random
+    v = d.Vault(random.Random(2))
+    enc = v.encode("O Brasil cresceu.", {"Brasil"})
+    c = re.search(r"\{Em[a-z]{2}\}", enc).group(0)
+    out, lost = v.decode(f"A população de {c} começará sua {{P..}}.")
+    assert out == "A população do Brasil começará sua." and lost == []
+
+
+def test_echoed_headings_are_removed():
+    assert d._no_heads("# Um século\nSeção: Um século\nUm século\n\nTexto real.", "Um século") == "Texto real."
+
+
+def test_lead_keeps_italic_byline_and_sources_untouched():
+    md = ("# Título\n\n*Em 2024 nasceram 2,39 milhões de brasileiros, o menor número.*\n\n"
+          "wasemu · Demografia · 3 de novembro de 2026\n\n"
+          "Fontes: [SIDRA 5932](https://sidra.ibge.gov.br/tabela/5932), [6579](https://sidra.ibge.gov.br/tabela/6579).\n\n"
+          "Texto comum do artigo com várias palavras para reescrever aqui.")
+    ps = d.make_pieces(md, 150)
+    lead = [p for p in ps if p.wrap]
+    assert len(lead) == 1 and lead[0].wrap == "*" and not lead[0].text.startswith("*")
+    assert any(p.text.startswith("wasemu") and not p.rewrite for p in ps)
+    assert any(p.text.startswith("Fontes") and not p.rewrite for p in ps)
+    m = Fake(redator=lambda u: "Nova linha fina.")
+    out = d.process_piece(lead[0], "pt", None, m, None, secret=False)
+    assert out.out == "*Nova linha fina.*"
+
+
+def test_number_with_unit_is_one_code_and_nomes_mode_keeps_numbers():
+    import random
+    v = d.Vault(random.Random(4))
+    enc = v.encode("O menor número em 29 anos.", set())
+    assert "anos" not in enc and len(v.back) == 1
+    v2 = d.Vault(random.Random(4), numbers=False)
+    enc2 = v2.encode("O menor número em 29 anos, diz o IBGE.", {"IBGE"})
+    assert "29 anos" in enc2 and "IBGE" not in enc2
+
+
+def test_model_meta_notes_are_removed():
+    s = "Texto bom.\n\n---\n**Nota:** O item 1996 não tem lugar marcado."
+    assert d._no_heads(s, "") == "Texto bom."

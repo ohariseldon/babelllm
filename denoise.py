@@ -233,6 +233,11 @@ def split_blocks(md: str) -> list[str]:
 
 def _is_text(blk: str) -> bool:
     s = blk.lstrip()
+    if "\n" not in s.strip() and len(s.split()) < 14 and (" · " in s or not re.search(r"[.!?:…]\W*$", s)):
+        return False  # linha de assinatura, data ou crédito: fica como está
+    if re.match(r"\W*(Fontes?|Notas?|Nota técnica|Metodologia|Sources?|Notes?|Methodology)\b\W", s, re.I) \
+            or len(_LINK.findall(s) + _URL.findall(s)) * 12 > len(s.split()):
+        return False  # bloco de fontes ou nota técnica: só links e códigos de série, nada a reescrever
     return bool(s) and not _HEAD.match(s) and not s.startswith(("```", "|", "<", "![")) and len(s.split()) >= 4
 
 
@@ -246,6 +251,10 @@ class Piece:
     error: str = ""
     marks: int = 0
     coverage: float = 0.0
+    wrap: str = ""
+
+
+_WRAP = re.compile(r"^(\*{1,2}|_)(?![*_\s])([^*\n]+?)(?<![*_\s])\1$")
 
 
 def make_pieces(md: str, max_words: int) -> list[Piece]:
@@ -258,6 +267,11 @@ def make_pieces(md: str, max_words: int) -> list[Piece]:
             buf.clear()
 
     for blk in split_blocks(md):
+        w = _WRAP.match(blk.strip())
+        if w and _is_text(w.group(2)):  # linha fina em itálico/negrito: trecho próprio, volta com a mesma ênfase
+            flush()
+            pieces.append(Piece(w.group(2), True, heading, wrap=w.group(1)))
+            continue
         if _is_text(blk):
             if buf and sum(len(b.split()) for b in buf) + len(blk.split()) > max_words:
                 flush()
@@ -330,21 +344,26 @@ PROMPTS = {
                   "Copie números, nomes, citações e URLs exatamente. Linha em branco entre parágrafos. Só as notas."),
         "redator": ("Escreva em português do Brasil, como prosa de artigo, o que estas notas dizem, sem acrescentar "
                     "nada. Palavras e ordem suas, frases de tamanhos variados, sem clichês de IA. Bloco de notas = "
-                    "parágrafo; '[lista]' = item com '- '. Números, nomes, citações e URLs exatos. Só o texto."),
+                    "parágrafo; '[lista]' = item com '- '. Números, nomes, citações e URLs exatos. Não acrescente fatos, "
+                    "causas, exemplos nem opiniões; tom sóbrio, sem palavras pomposas; tamanho parecido com o pedido. "
+                    "Sem títulos. Só o texto."),
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
-        "secao": "Seção: {h}\n\n", "faltou": "\n\nInclua também: {x}",
+        "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
+        "tamanho": "\n\n(cerca de {n} palavras)",
         "reparo": ("Neste texto faltam alguns itens. Insira cada um deles uma vez, no lugar que a nota indica, "
                    "mudando o mínimo possível do resto. Mantenha todos os códigos entre chaves já presentes. "
                    "Responda só com o texto completo corrigido."),
         "reparo_user": "Itens que faltam: {x}\n\nNotas onde eles aparecem:\n{n}\n\nTexto:\n{t}",
-        "logica": (" Reorganize a lógica do parágrafo: mude a ordem das ideias, junte ou divida frases, inverta "
-                   "causa e efeito ou geral e exemplo quando o sentido permitir. Troque por sinônimos ou outra formulação "
+        "logica": (" Reorganize a lógica do parágrafo: mude a ordem das ideias, junte ou divida frases, "
+                   "sem mudar quem fez o quê nem a que dado cada número se refere. Troque por sinônimos ou outra formulação "
                    "pelo menos metade das palavras de conteúdo das notas (substantivos, verbos, adjetivos), "
                    "menos os termos técnicos."),
-        "codigos": (" Os códigos entre chaves ({N..} número, {E..} nome ou sigla, {Em..} masculino, {Ef..} feminino, "
-                    "{L..} link, {C..} citação, {P..} palavra de sentido oculto) são opacos: use cada um exatamente "
-                    "uma vez, copiado igual, sem traduzir, explicar ou inventar códigos. Um {P..} ocupa o lugar de uma "
+        "codigos": (" Os códigos entre chaves (N número, A ano, E nome ou sigla, Em masculino, Ef feminino, "
+                    "L link, C citação, P palavra de sentido oculto) são opacos: use cada um exatamente "
+                    "uma vez, copiado igual, sem traduzir, explicar ou inventar códigos. Cada código fica preso às "
+                    "palavras vizinhas da nota: 'em' + ano continua sendo o ano daquele dado. Nome Em/Ef leva artigo "
+                    "como substantivo (o, do, no / a, da, na). Um código P ocupa o lugar de uma "
                     "palavra só e mantém a função dela na nota (verbo continua verbo, advérbio continua advérbio)."),
         "marcas": (" Enquanto escreve, insira o símbolo ¦ entre palavras, em média um a cada {k} palavras, "
                    "espalhado também no meio das frases. Ele será apagado depois; não o explique."),
@@ -354,18 +373,21 @@ PROMPTS = {
                   "names, citations and URLs exactly. Blank line between paragraphs. Notes only."),
         "redator": ("Write, as English article prose, what these notes say, adding nothing. Your own words and order, "
                     "varied sentence length, no AI stock phrases. Note block = paragraph; '[list]' = '- ' item. "
-                    "Numbers, names, citations and URLs exact. Text only."),
+                    "Numbers, names, citations and URLs exact. Add no facts, causes, examples or opinions; plain tone; "
+                    "length close to the one asked. No headings. Text only."),
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
-        "secao": "Section: {h}\n\n", "faltou": "\n\nAlso include: {x}",
+        "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
+        "tamanho": "\n\n(about {n} words)",
         "reparo": ("Some items are missing from this text. Insert each one once, where its note places it, changing "
                    "as little else as possible. Keep every brace code already present. Reply with the full corrected text only."),
         "reparo_user": "Missing items: {x}\n\nNotes where they appear:\n{n}\n\nText:\n{t}",
-        "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, swap "
-                   "cause and effect or general and example where the meaning allows. Replace at least half of the notes' "
+        "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, "
+                   "without changing who did what or which fact each number belongs to. Replace at least half of the notes' "
                    "content words (nouns, verbs, adjectives) with synonyms or other phrasing, except technical terms."),
-        "codigos": (" The codes in braces ({N..} number, {E..} name or acronym, {L..} link, {C..} citation) are "
-                    "opaque: use each exactly once, copied verbatim, never translate, explain or invent codes."),
+        "codigos": (" The codes in braces (N number, A year, E name or acronym, L link, C citation, P hidden word) are "
+                    "opaque: use each exactly once, copied verbatim, never translate, explain or invent codes. Each "
+                    "code stays tied to its neighbor words in the note: 'in' + year is still the year of that fact."),
         "marcas": (" While writing, insert the symbol ¦ between words, on average once every {k} words, spread "
                    "inside sentences too. It will be deleted afterwards; do not explain it."),
     },
@@ -396,8 +418,10 @@ def local_notes(text: str, lang: str) -> str:
             is_list = bool(re.match(r"^\s*(?:[-*+]|\d+[.)])\s", raw))
             raw = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", raw)
             for sent in re.split(r"(?<=[.!?;:])\s+", raw):
-                words = [w for w in _KEEP_TOKEN.findall(sent)
-                         if w.startswith(("(", "[", "http")) or w.lower().strip(".,;:!?—–-\"“”'") not in drop]
+                toks = _KEEP_TOKEN.findall(sent)
+                words = [w for i, w in enumerate(toks)
+                         if w.startswith(("(", "[", "http", "{")) or w.lower().strip(".,;:!?—–-\"“”'") not in drop
+                         or (i + 1 < len(toks) and toks[i + 1].startswith("{"))]
                 words = [w.strip(".,;:!?—–\"“”") if not w.startswith(("(", "[")) else w for w in words]
                 words = [w for w in words if w]
                 if words:
@@ -634,10 +658,12 @@ _ART_F = {"a", "as", "da", "das", "na", "nas", "à", "às", "pela", "pelas", "um
 _LINK = re.compile(r"\[[^\]\n]{1,200}\]\([^)\s]+\)")
 _URL = re.compile(r"https?://[^\s)\]]+")
 _CITE = re.compile(r"\([A-ZÀ-Ú][^()\n]{0,60}?\d{4}[a-z]?\)|\[\d+(?:[,–-]\s*\d+)*\]")
-_NUM = re.compile(r"(?<![{\w])(?:R\$\s?|US\$\s?)?\d+(?:[.,]\d+)*(?:\s?%)?")
+_NUM = re.compile(r"(?<![{\w])(?:R\$\s?|US\$\s?)?\d+(?:[.,]\d+)*(?:\s?%|\s(?:mil|milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões)|thousand|million|billion|trillion|p\.p\.|pontos percentuais|pontos?|anos?|mes(?:es)?|mês|dias?|semanas?|décadas?|séculos?|horas?|vezes|years?|months?|days?|weeks?|decades?|centuries|times|points?)(?![\wÀ-ÿ]))?")
+_YEAR = re.compile(r"(?:1[5-9]|20)\d\d")
 _CAP = r"[A-ZÀ-Ý][\wÀ-ÿ'’-]*"
 _NAME = re.compile(r"(?<![{\w])" + _CAP + r"(?: (?:de |da |do |dos |das |of |the )?" + _CAP + r")*")
-_CODE = re.compile(r"\{[NELCP][mf]?[a-z]{2}\}")
+_CODE = re.compile(r"\{[NAELCP][mf]?[a-z]{2}\}")
+_FAKE_CODE = re.compile(r"\{[NAELCPQ][mf]?(?:[a-z]{0,3}|\.\.|…)\}")  # código inventado ou copiado do prompt
 # Sigilo forte: palavras que dão direção ou polaridade ao fato (subiu/caiu, mais/menos, não...).
 _POL = re.compile(r"(?<![{\w])(?:" + "|".join([
     r"n[ãa]o", r"nunca", r"jamais", r"nenhuma?", r"nada",
@@ -678,8 +704,8 @@ class Vault:
     O modelo só vê {Nxy}, {Exy}, {Lxy}, {Cxy}: não sabe os valores, não faz conta nem
     "corrige" fatos, e a API nunca recebe os dados reais. O script destroca no fim."""
 
-    def __init__(self, rng, strong: bool = False):
-        self.rng, self.fwd, self.back, self.strong = rng, {}, {}, strong
+    def __init__(self, rng, strong: bool = False, numbers: bool = True):
+        self.rng, self.fwd, self.back, self.strong, self.numbers = rng, {}, {}, strong, numbers
 
     def _code(self, kind: str, value: str) -> str:
         if value in self.fwd:
@@ -695,7 +721,8 @@ class Vault:
         text = _LINK.sub(lambda m: self._code("L", m.group(0)), text)
         text = _URL.sub(lambda m: self._code("L", m.group(0)), text)
         text = _CITE.sub(lambda m: self._code("C", m.group(0)), text)
-        text = _NUM.sub(lambda m: self._code("N", m.group(0)), text)
+        if self.numbers:
+            text = _NUM.sub(lambda m: self._code("A" if _YEAR.fullmatch(m.group(0)) else "N", m.group(0)), text)
 
         def name(m):
             words = m.group(0).split(" ")
@@ -734,12 +761,31 @@ class Vault:
                     seen.add(k)
                     return v
             return ""
+        def contract(m):
+            w, c = m.group(1), m.group(2)
+            g = c[2] if c[2] in "mf" else ""
+            new = {"de": {"m": "do", "f": "da"}, "em": {"m": "no", "f": "na"}, "por": {"m": "pelo", "f": "pela"}}[w.lower()][g]
+            return (new.capitalize() if w[0].isupper() else new) + " " + c
+        text = re.sub(r"(?<![\wÀ-ÿ])([Dd]e|[Ee]m|[Pp]or) (\{E[mf][a-z]{2}\})", contract, text)
         text = _CODE.sub(back, text)
+        text = _FAKE_CODE.sub("", text)
         text = re.sub(r"\{([^{}\n]{1,60})\}", r"\1", text)  # {Palavra} que o modelo inventou: tira as chaves
-        return re.sub(r"[ \t]{2,}", " ", text), [c for c in self.back if c not in seen]
+        text = re.sub(r" +([,.;:!?)])", r"\1", re.sub(r"[ \t]{2,}", " ", text))
+        return text, [c for c in self.back if c not in seen]
 
 
 # ---------------------------------------------------------------- motor
+
+def _no_heads(s: str, heading: str) -> str:
+    """Tira títulos que o modelo ecoou: linhas com #, «Seção:» e cópias do título da seção."""
+    key = lambda x: re.sub(r"[\W_]+", " ", x).strip().lower()
+    h = key(heading)
+    keep = [l for l in s.split("\n") if not (_HEAD.match(l.lstrip()) or re.match(r"\s*\**(Seção|Section)\s*:", l)
+                                           or re.match(r"\s*(?:-{3,}|\*{3,}|_{3,})\s*$", l)
+                                           or re.match(r"\s*[*_(\[]*(Nota|Observação|Obs|Note|N\.B)\b\W", l, re.I)
+                                           or (h and key(l) == h))]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(keep)).strip()
+
 
 def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revisao: Model | None,
                   marks: float = 0.0, logic: bool = True, secret: bool = True, names: set[str] | None = None,
@@ -749,7 +795,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
     P = PROMPTS[lang]
     head = P["secao"].format(h=p.heading) if p.heading else ""
     need = must_keep(p.text)
-    vault = Vault(rng or _rng, strong=(secret == "forte")) if secret else None
+    vault = Vault(rng or _rng, strong=(secret == "forte"), numbers=(secret != "nomes")) if secret else None
     src = vault.encode(p.text, names or set()) if vault else p.text
     codes_rule = P["codigos"] if vault and vault.back else ""
     mark_rule = P["marcas"].format(k=max(1, round(10 / marks))) if marks > 0 else ""
@@ -758,7 +804,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
 
     def clean(s: str) -> tuple[str, str, list[str]]:
         """(texto ainda codificado, texto final, o que faltou na forma que pode ir à API)."""
-        s, n, cov = strip_marks(_tidy(s))
+        s, n, cov = strip_marks(_no_heads(_tidy(s), p.heading))
         p.marks, p.coverage = n, cov
         if vault is None:
             return s, s, missing(need, s)
@@ -771,7 +817,8 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         else:
             notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
-        coded, draft, lost = clean(redator(w_sys, head + notes, max_tokens=cap))
+        size = P["tamanho"].format(n=len(p.text.split()))
+        coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
         for _ in range(2 if lost else 0):  # reparo: o redator insere só o que faltou, no texto que já escreveu
             if not lost:
                 break
@@ -779,7 +826,8 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             where = "\n".join(l for l in notes.splitlines() if any(x in l for x in lost)) or notes
             c2, retry, lost2 = clean(redator(P["reparo"] + codes_rule, P["reparo_user"].format(
                 x="; ".join(lost), n=where, t=coded), max_tokens=cap))
-            if len(lost2) < len(lost) and len(retry.split()) > 0.8 * len(draft.split()):
+            grew = len(c2.split()) - len(coded.split())
+            if len(lost2) < len(lost) and -0.2 * len(coded.split()) < grew <= 6 * len(lost) + 8:
                 coded, draft, lost = c2, retry, lost2
             else:
                 p.marks, p.coverage = st
@@ -791,11 +839,13 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                 out, lost = fixed, lost3
             else:  # ficou a versão do redator, que não tinha marcadores
                 p.marks, p.coverage = 0, 0.0
+        if p.wrap:
+            out = p.wrap + " ".join(out.split()) + p.wrap
         p.out = out
         p.lost = missing(need, out) + ([vault.back[c] for c in lost if vault.back[c] not in need] if vault else [])
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
-        p.out = p.text
+        p.out = p.wrap + p.text + p.wrap
     return p
 
 
@@ -888,8 +938,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
                          "quanto mais, melhor a remoção da marca do próprio redator, e pior a fluidez). Padrão: 0")
-    ap.add_argument("--sigilo", choices=["basico", "forte", "nao"], default="basico",
+    ap.add_argument("--sigilo", choices=["basico", "nomes", "forte", "nao"], default="basico",
                     help="basico (padrão): números, nomes, siglas, links e citações vão como códigos com chave; "
+                         "nomes: só nomes, siglas, links e citações (números em claro; melhor para artigos de dados); "
                          "forte: também as palavras de direção e polaridade (subiu, caiu, mais, menos, não...); "
                          "nao: tudo em claro")
     ap.add_argument("--sem-sigilo", action="store_true", help="o mesmo que --sigilo nao")
@@ -924,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
     rep = run(files, Path(a.saida), notas, redator, revisao, a.paralelo, a.palavras,
               "." + a.formato if a.formato else None, a.so_limpar, a.idioma,
               max(0.0, min(10.0, a.marcadores)), not a.manter_logica,
-              False if (a.sem_sigilo or a.sigilo == "nao") else ("forte" if a.sigilo == "forte" else True))
+              False if (a.sem_sigilo or a.sigilo == "nao") else (a.sigilo if a.sigilo in ("forte", "nomes") else True))
     for f in rep["arquivos"]:
         flag = " ERRO" if f["trechos_com_erro"] else ""
         lost = f" perdeu: {', '.join(f['itens_perdidos'][:5])}" if f["itens_perdidos"] else ""
