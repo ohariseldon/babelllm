@@ -420,8 +420,10 @@ class Model:
     temperature: float | None = None
     timeout: float = 120
     usage: Usage = field(default_factory=Usage)
+    rpm: float = 0
 
     def __post_init__(self):
+        self.limiter = Limiter(self.rpm)
         self.provider, _, self.name = self.spec.partition(":")
         self.provider = self.provider.lower()
         if self.provider not in {"openai", "ollama", "anthropic", "gemini", "compat"} or not self.name:
@@ -473,7 +475,9 @@ class Model:
 
     def _post(self, body: dict, headers: dict) -> dict:
         path = urllib.parse.urlsplit(self.url).path
-        for attempt in range(5):
+        tries = 10
+        for attempt in range(tries):
+            self.limiter.wait()
             c = self._conn()
             try:
                 c.request("POST", path, json.dumps(body).encode(), {"Content-Type": "application/json", **headers})
@@ -482,21 +486,48 @@ class Model:
             except (OSError, http.client.HTTPException) as e:
                 c.close()
                 setattr(_local, self.url, None)
-                if attempt < 4:
-                    time.sleep(0.5 * 2 ** attempt)
+                if attempt < tries - 1:
+                    time.sleep(min(0.5 * 2 ** attempt, 20))
                     continue
                 raise RuntimeError(f"{self.spec}: {e}") from None
             if resp.status == 200:
                 return json.loads(raw)
-            msg = raw.decode(errors="replace")[:300]
+            msg = raw.decode(errors="replace")[:600]
             if resp.status == 400 and "max_tokens" in msg and "max_tokens" in body:  # o-series etc.
                 body["max_completion_tokens"] = body.pop("max_tokens")
                 continue
-            if resp.status in (429, 500, 502, 503, 504, 529) and attempt < 4:
-                time.sleep(min(float(resp.getheader("retry-after") or 0) or 1.5 * 2 ** attempt, 30))
+            if resp.status in (429, 500, 502, 503, 504, 529) and attempt < tries - 1:
+                # espera o que a API pede (cabeçalho retry-after ou "retryDelay": "17s" do Gemini)
+                hint = resp.getheader("retry-after") or (re.findall(r'retryDelay"?\s*:\s*"?(\d+(?:\.\d+)?)s', msg) or [0])[0]
+                wait = float(hint or 0) or min(1.5 * 2 ** attempt, 60)
+                if resp.status == 429:
+                    self.limiter.slow_down()
+                time.sleep(min(wait + 0.5, 90))
                 continue
-            raise RuntimeError(f"{self.spec}: HTTP {resp.status}: {msg}")
+            raise RuntimeError(f"{self.spec}: HTTP {resp.status}: {msg[:300]}")
         raise RuntimeError(f"{self.spec}: sem resposta")
+
+
+class Limiter:
+    """Teto de pedidos por minuto, compartilhado entre as threads de um modelo.
+    Com rpm=0 não limita até a API devolver 429; aí passa a espaçar os pedidos sozinho."""
+
+    def __init__(self, rpm: float = 0):
+        self.lock, self.next, self.rpm = threading.Lock(), 0.0, rpm
+
+    def wait(self):
+        if not self.rpm:
+            return
+        with self.lock:
+            now = time.monotonic()
+            at = max(now, self.next)
+            self.next = at + 60.0 / self.rpm
+        if at > now:
+            time.sleep(at - now)
+
+    def slow_down(self):
+        with self.lock:
+            self.rpm = max(2.0, (self.rpm or 120.0) * 0.7)
 
 
 _local = threading.local()
@@ -789,6 +820,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-j", "--paralelo", type=int, default=0,
                     help="chamadas simultâneas (padrão: todos os trechos de uma vez, até 256; baixe se der 429)")
     ap.add_argument("--palavras", type=int, default=150, help="tamanho máximo do trecho em palavras (padrão: 150)")
+    ap.add_argument("--rpm", type=float, default=0,
+                    help="teto de pedidos por minuto por modelo (ex.: 15 no plano grátis do Gemini). "
+                         "Padrão: sem teto; ao receber 429 o script reduz o ritmo sozinho")
     ap.add_argument("--formato", choices=["md", "txt", "docx"], help="formato de saída (padrão: o da entrada)")
     ap.add_argument("--idioma", choices=["auto", "pt", "en"], default="auto")
     ap.add_argument("--so-limpar", action="store_true", help="só tira invisíveis e metadados, sem LLM")
@@ -801,7 +835,7 @@ def main(argv: list[str] | None = None) -> int:
         if not spec:
             raise SystemExit("informe -m provedor:modelo, ou use --so-limpar")
         pool: dict[str, Model] = {}
-        mk = lambda s: pool.setdefault(s, Model(s, a.base_url, a.temperatura))
+        mk = lambda s: pool.setdefault(s, Model(s, a.base_url, a.temperatura, rpm=a.rpm))
         redator = mk(spec)
         notas = None if a.notas.lower() == "local" else mk(a.notas)
         revisao = mk(a.revisao) if a.revisao and a.revisao.lower() not in {"nao", "não", "no", "off"} else None

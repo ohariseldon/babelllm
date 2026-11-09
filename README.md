@@ -27,7 +27,8 @@ python denoise.py artigos/ -m ollama:qwen2.5:7b-instruct --notas openai:gpt-4o-m
 python denoise.py artigo.docx figura.png -o limpos/ --so-limpar
 ```
 
-Opções: `-j N` chamadas simultâneas (padrão: todos os trechos de uma vez, até 256;
+Opções: `--rpm 15` teto de pedidos por minuto (plano grátis do Gemini aceita 15; sem `--rpm`,
+o script reduz o ritmo sozinho quando recebe 429 e espera o tempo que a API pede), `-j N` chamadas simultâneas (padrão: todos os trechos de uma vez, até 256;
 baixe se a API devolver 429), `--palavras 150` tamanho do trecho, `--formato docx`,
 `--idioma pt|en`, `--relatorio rel.json`. Entradas: .md .txt .docx .pdf.
 
