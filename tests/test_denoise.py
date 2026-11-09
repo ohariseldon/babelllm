@@ -495,3 +495,10 @@ def test_style_examples_go_to_writer_and_copy_is_redone(tmp_path):
 def test_copied_ignores_ngrams_from_source():
     assert not d.copied("a casa de pedra do rio", ["uma casa de pedra do rio azul"], "a casa de pedra do rio")
     assert d.copied("vimos a casa de pedra do rio", ["uma casa de pedra do rio azul"], "vimos tudo")
+
+
+def test_no_before_year_becomes_em():
+    red = lambda u: "No 2015 nasceram 3 crianças, e no 2016 menos."
+    p = d.process_piece(d.Piece("Em 2015 nasceram 3 crianças, e em 2016 menos.", True), "pt", None,
+                        Fake(redator=red), None, secret=False)
+    assert p.out.startswith("Em 2015") and "em 2016" in p.out

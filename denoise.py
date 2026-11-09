@@ -1271,6 +1271,8 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         if lang == "pt":  # palavras de Portugal que soam estranhas no Brasil
             out = re.sub(r"(?<![\wÀ-ÿ])(" + "|".join(_PT_PT) + r")(?![\wÀ-ÿ])",
                          lambda m: _PT_PT[m.group(1)], out)
+        if lang == "pt":  # "No 2015" (ano não leva artigo): "Em 2015"
+            out = re.sub(r"(?<![\wÀ-ÿ])([Nn])o (?=\d{4}(?![\d,.]))", lambda m: "Em " if m.group(1) == "N" else "em ", out)
         if lang == "pt":  # "entre em 2015 e em 2016", "desde em 2010": preposição dobrada antes do ano
             out = re.sub(r"(?<![\wÀ-ÿ])(entre|desde|até|durante|após|para|de) em (?=\d{4}(?!\d))", r"\1 ", out,
                          flags=re.I)
