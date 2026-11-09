@@ -252,6 +252,7 @@ class Piece:
     marks: int = 0
     coverage: float = 0.0
     wrap: str = ""
+    patterns: int = 0
 
 
 _WRAP = re.compile(r"^(\*{1,2}|_)(?![*_\s])([^*\n]+?)(?<![*_\s])\1$")
@@ -369,6 +370,18 @@ PROMPTS = {
                    "sem mudar quem fez o quê nem a que dado cada número se refere. Troque por sinônimos ou outra formulação "
                    "pelo menos metade das palavras de conteúdo das notas (substantivos, verbos, adjetivos), "
                    "menos os termos técnicos."),
+        "estrutura": {
+            "base": (" Estrutura deste trecho, sorteada: {a}; ritmo das frases: {r}; {e}. Não use a fórmula "
+                     "'não é X, é Y' nem abra com uma negação para depois corrigir, a não ser que a negação seja o fato; "
+                     "sem pergunta retórica, sem frase de efeito com dois-pontos, sem frase final de resumo."),
+            "abertura": ["comece pelo dado mais concreto", "comece pela consequência", "comece pela causa",
+                         "comece pelo contexto de tempo ou de lugar", "comece por uma constatação curta",
+                         "comece pelo ator principal (quem faz ou mede)"],
+            "ritmo": ["curta, longa, média", "longa, curta, longa", "média, média, curta, longa",
+                      "curta, curta, longa", "longa, média, curta"],
+            "enumeracao": ["onde houver três itens seguidos, separe um deles em outra frase",
+                           "evite listas de três; use dois itens ou quatro", "prefira juntar itens numa frase só, sem série"],
+        },
         "codigos": (" Os códigos entre chaves ({k}) são opacos: use cada um exatamente uma vez, copiado igual, "
                     "sem traduzir, explicar ou inventar códigos. Mantenha as preposições da nota em volta de cada "
                     "código ('de', 'em', 'desde'): 'em' + ano continua sendo o ano daquele dado. Não repita depois "
@@ -402,6 +415,18 @@ PROMPTS = {
         "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, "
                    "without changing who did what or which fact each number belongs to. Replace at least half of the notes' "
                    "content words (nouns, verbs, adjectives) with synonyms or other phrasing, except technical terms."),
+        "estrutura": {
+            "base": (" Structure for this passage, drawn at random: {a}; sentence rhythm: {r}; {e}. Do not use the "
+                     "'not X, but Y' formula or open with a negation to correct it, unless the negation is the fact; no "
+                     "rhetorical questions, no colon punchlines, no closing summary sentence."),
+            "abertura": ["open with the most concrete fact", "open with the consequence", "open with the cause",
+                         "open with the time or place", "open with a short plain statement",
+                         "open with the main actor (who does or measures)"],
+            "ritmo": ["short, long, medium", "long, short, long", "medium, medium, short, long", "short, short, long",
+                      "long, medium, short"],
+            "enumeracao": ["where three items run together, move one to another sentence",
+                           "avoid lists of three; use two items or four", "prefer merging items into one sentence, no series"],
+        },
         "codigos": (" The codes in braces ({k}) are opaque: use each exactly once, copied verbatim, never translate, "
                     "explain or invent codes. Keep the note's prepositions around each code: 'in' + year is still the "
                     "year of that fact. Do not repeat after a code the unit it already holds."),
@@ -868,6 +893,21 @@ def broken_pairs(pairs: list[tuple[str, str]], coded: str) -> list[tuple[str, st
     return bad
 
 
+_AI_PAT = {
+    "pt": re.compile(r"\bnão (?:é|são|foi|se trata de)\b[^.;]{1,60}?[,;—–-]\s*(?:mas|e sim|e)?\s*(?:é|são|foi)\b"
+                     r"|\b\w+, \w+ e \w+\b(?=[.;])|^[^:\n]{3,40}: [A-ZÀ-Ú]|\?\s|\b(?:Em suma|Em resumo|No fim das contas)\b",
+                     re.I | re.M),
+    "en": re.compile(r"\b(?:is|are|was) not\b[^.;]{1,60}?[,;—–-]\s*(?:but|it)?\s*(?:is|are|was)\b"
+                     r"|\b\w+, \w+,? and \w+\b(?=[.;])|^[^:\n]{3,40}: [A-Z]|\?\s|\b(?:In short|Ultimately|In the end)\b",
+                     re.I | re.M),
+}
+
+
+def ai_patterns(text: str, lang: str) -> int:
+    """Conta fórmulas retóricas típicas de IA: 'não é X, é Y', série de três, dois-pontos de efeito, pergunta, resumo."""
+    return len(_AI_PAT[lang].findall(text))
+
+
 def _no_heads(s: str, heading: str) -> str:
     """Tira títulos que o modelo ecoou: linhas com #, «Seção:» e cópias do título da seção."""
     key = lambda x: re.sub(r"[\W_]+", " ", x).strip().lower()
@@ -900,7 +940,11 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                 kinds.append(P["tipos"][k])
         codes_rule = P["codigos"].format(k="; ".join(kinds))
     mark_rule = P["marcas"].format(k=max(1, round(10 / marks))) if marks > 0 else ""
-    w_sys = P["redator"] + (P["logica"] if logic else "") + codes_rule + ("" if revisao else mark_rule)
+    struct = ""
+    if logic:  # a estrutura vem do nosso sorteio, não do hábito do modelo
+        E, r = P["estrutura"], rng or _rng
+        struct = E["base"].format(a=r.choice(E["abertura"]), r=r.choice(E["ritmo"]), e=r.choice(E["enumeracao"]))
+    w_sys = P["redator"] + (P["logica"] + struct if logic else "") + codes_rule + ("" if revisao else mark_rule)
     r_sys = P["revisao"] + codes_rule + mark_rule
 
     def clean(s: str) -> tuple[str, str, list[str]]:
@@ -969,6 +1013,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             bad = broken_pairs(pairs, coded)
             extra += [f"(par trocado: {vault.back[n]} / {vault.back[a]})" for n, a in bad]
         p.lost = miss + extra
+        p.patterns = ai_patterns(out, lang)
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
         p.out = p.wrap + p.text + p.wrap
@@ -1024,6 +1069,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
             "trechos": len(rw), "trechos_com_erro": sum(bool(p.error) for p in rw),
             "rho_3gramas": rho3("\n".join(p.text for p in rw), "\n".join(p.out or p.text for p in rw)) if rw and not only_clean else None,
             "itens_perdidos": [x for p in rw for x in p.lost],
+            "formulas_ia": sum(p.patterns for p in rw),
             "marcadores": sum(p.marks for p in rw) if marks else None,
             "cobertura_marcadores": round(sum(p.coverage * len(p.out.split()) for p in rw)
                                           / max(1, sum(len(p.out.split()) for p in rw)), 3) if marks else None,

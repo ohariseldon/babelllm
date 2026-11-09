@@ -349,3 +349,17 @@ def test_stray_braces_removed_when_source_had_none():
     enc = v.encode("O IBGE estimou.", {"IBGE"})
     c = re.search(r"\{E[mf]?[a-z]{2}\}", enc).group(0)
     assert v.decode(f"As estimativas do {c}}} saíram.")[0] == "As estimativas do IBGE saíram."
+
+
+def test_structure_recipe_is_drawn_and_ai_patterns_counted():
+    import random
+    seen = []
+    class Cap(Fake):
+        def __call__(self, system, user, max_tokens=0):
+            seen.append(system)
+            return "Texto."
+    d.process_piece(d.Piece("Texto comum com várias palavras para reescrever.", True), "pt", None, Cap(), None,
+                    secret=False, rng=random.Random(1))
+    assert "sorteada" in seen[0] and "'não é X, é Y'" in seen[0]
+    assert d.ai_patterns("Não é só crise, é mudança. Juros, câmbio e inflação.", "pt") == 2
+    assert d.ai_patterns("A inflação subiu em outubro.", "pt") == 0
