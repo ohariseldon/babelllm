@@ -303,6 +303,10 @@ def make_pieces(md: str, max_words: int) -> list[Piece]:
             flush()
             pieces.append(Piece(w.group(2), True, heading, wrap=w.group(1)))
             continue
+        if _is_text(blk) and all(_LIST_LINE.match(l) for l in blk.strip().splitlines()):
+            flush()  # lista sozinha num trecho: o redator vê só a lista e a devolve como lista
+            pieces.append(Piece(blk, True, heading))
+            continue
         if _is_text(blk):
             if buf and sum(len(b.split()) for b in buf) + len(blk.split()) > max_words:
                 flush()
@@ -409,7 +413,7 @@ PROMPTS = {
         "estrutura": {
             "base": (" Estrutura deste trecho, sorteada: {a}; ritmo das frases: {r}; {e}. Não use a fórmula "
                      "'não é X, é Y' nem abra com uma negação para depois corrigir, a não ser que a negação seja o fato; "
-                     "sem pergunta retórica, sem frase de efeito com dois-pontos, sem frase final de resumo."),
+                     "sem pergunta retórica, sem frase final de resumo{c}."),
             "abertura": ["comece pelo dado mais concreto", "comece pela consequência", "comece pela causa",
                          "comece pelo contexto de tempo ou de lugar", "comece por uma constatação curta",
                          "comece pelo ator principal (quem faz ou mede)"],
@@ -503,6 +507,11 @@ _NOT_NOUN = {"mais", "menos", "apenas", "depois", "antes", "pois", "após", "atr
              "quase", "talvez", "ambos", "ambas", "todos", "todas", "outros", "outras", "eles", "elas", "seus", "suas",
              "os", "as", "dos", "das", "nos", "nas", "aos", "às", "pelos", "pelas", "es", "seus", "estes", "estas", "esses",
              "essas", "anos", "meses", "dias", "pontos", "vezes"}
+_UNITS = {"toneladas", "litros", "hectares", "barris", "cabeças", "quilos", "metros", "reais", "dólares", "unidades",
+          "sacas", "quilômetros", "pessoas", "habitantes", "empregos", "vagas", "famílias", "domicílios", "empresas"}
+_PT_PT = {"rapariga": "moça", "raparigas": "moças", "autocarro": "ônibus", "comboio": "trem", "telemóvel": "celular",
+          "equipa": "equipe", "equipas": "equipes", "facto": "fato", "factos": "fatos", "registo": "registro",
+          "registos": "registros", "ecrã": "tela", "utente": "usuário", "utentes": "usuários", "contacto": "contato"}
 _GLUE = {"de", "do", "da", "dos", "das", "em", "no", "na", "of", "in"}
 
 
@@ -892,7 +901,7 @@ class Vault:
             v = self.back.get(c, "")
             scale = re.search(r"(?:milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões))$", v)
             if self.lang == "pt" and (c in self.de_after or scale) and nxt.lower() not in _NOT_NOUN \
-                    and not re.search(r"(?:ad|id)[oa]s$", nxt.lower()):
+                    and (nxt.lower() in _UNITS or not re.search(r"(?:ad|id)[oa]s$", nxt.lower())):
                 return f"{c} de {nxt}"
             return m.group(0)
         text = re.sub(r"(\{N[a-z]{2}\}) ([a-zà-ú]+s)(?![\wÀ-ÿ])", de, text)
@@ -1071,7 +1080,8 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
     struct = ""
     if logic:  # a estrutura vem do nosso sorteio, não do hábito do modelo
         E, r = P["estrutura"], rng or _rng
-        struct = E["base"].format(a=r.choice(E["abertura"]), r=r.choice(E["ritmo"]), e=r.choice(E["enumeracao"]))
+        colon = "" if ":" in p.text else (", sem frase de efeito com dois-pontos" if lang == "pt" else ", no colon punchlines")
+        struct = E["base"].format(a=r.choice(E["abertura"]), r=r.choice(E["ritmo"]), e=r.choice(E["enumeracao"]), c=colon)
     w_sys = P["redator"] + (P["logica"] + struct if logic else "") + codes_rule + ("" if revisao else mark_rule)
     r_sys = P["revisao"] + codes_rule + mark_rule
 
@@ -1143,6 +1153,9 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                 out, lost = fixed, lost3
             else:  # ficou a versão do redator, que não tinha marcadores
                 p.marks, p.coverage = 0, 0.0
+        if lang == "pt":  # palavras de Portugal que soam estranhas no Brasil
+            out = re.sub(r"(?<![\wÀ-ÿ])(" + "|".join(_PT_PT) + r")(?![\wÀ-ÿ])",
+                         lambda m: _PT_PT[m.group(1)], out)
         if "—" not in p.text:  # travessão que o original não tinha: vira vírgula
             out = re.sub(r"\s*—\s*", ", ", out)
             out = re.sub(r",\s*([.;:!?])", r"\1", out)

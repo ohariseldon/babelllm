@@ -408,3 +408,13 @@ def test_form_issues_and_dash_and_em_rules():
     a, n = v.fwd["2024"], v.fwd["2,86 milhões"]
     out, _ = v.decode(f"Durante {a}, foram {n} bebês.")
     assert out == "Durante 2024, foram 2,86 milhões de bebês."
+
+
+def test_list_block_is_own_piece_and_units_get_de():
+    ps = d.make_pieces("Parágrafo comum com várias palavras aqui.\n\n- item um longo\n- item dois longo\n\nOutro parágrafo comum aqui mesmo.", 150)
+    assert [p.text.startswith("- ") for p in ps if p.rewrite] == [False, True, False]
+    import random
+    v = d.Vault(random.Random(12))
+    v.encode("Colheu 14,3 milhões em 2020.", set())
+    c = v.fwd["14,3 milhões"]
+    assert v.decode(f"Foram {c} toneladas.")[0] == "Foram 14,3 milhões de toneladas."
