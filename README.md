@@ -140,6 +140,23 @@ z > 4 = marca detectada; |z| < 2 = indistinguível de texto sem marca.
 Num segundo artigo, a marca foi de 2,7 / 3,4 / 3,9 para 0,1 / 0,2 / −0,1 no padrão. Todas as variantes testadas
 ficaram com |z| < 2, inclusive a lista verde fixa, graças à troca de sinônimos no redator.
 
+**Teste com o SynthID real** (a implementação oficial do Google no `transformers`, chaves de exemplo da
+documentação, Qwen2.5-1.5B como gerador, 15 textos de ~330 tokens por condição; detectores oficiais do
+`synthid-text`, inclusive o bayesiano treinado, todos com a chave na mão):
+
+| condição | detectados (bayesiano) | AUC contra texto sem marca |
+|---|---|---|
+| com marca | 100% | 1,00 |
+| paráfrase simples (Haiku) | 0% | 0,45 |
+| babelllm padrão | 0% | 0,37 |
+| babelllm `--marcadores 5` | 0% | 0,48 |
+
+Nenhuma janela de 100 tokens ficou marcada. Leitura honesta: contra uma marca de token como o SynthID, qualquer
+reescrita completa feita por outro modelo já apaga a marca; a paráfrase simples também zerou. O que o babelllm
+acrescenta é o resto: os dados não vão para a API, os números e o sentido voltam conferidos, a formatação fica, e
+a estrutura e os marcadores atacam marcas de contexto e de estrutura. Amostra pequena: 0 de 15 ainda é
+compatível com uma taxa real de até ~20%.
+
 Para repetir: `python bench/marca_teste.py artigo.md -m anthropic:claude-haiku-4-5`.
 Para medir só o tempo sem gastar tokens: `bench/mock_server.py` simula uma API compatível com OpenAI.
 
