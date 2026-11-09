@@ -128,11 +128,11 @@ z > 4 = marca detectada; |z| < 2 = indistinguível de texto sem marca.
 | artigo de demografia | sem contexto | contexto de 1 palavra | contexto de 3 palavras |
 |---|---|---|---|
 | original | 0,2 | −0,1 | 0,1 |
-| marcado | 2,2 | 4,0 | **4,1** |
-| babelllm padrão | 1,2 | 0,9 | −0,5 |
-| babelllm `--marcadores 3` | 0,8 | −0,4 | −0,5 |
+| marcado | 1,9 | 2,7 | **4,9** |
+| babelllm padrão | 0,8 | −1,5 | 0,1 |
+| babelllm `--marcadores 5` | 0,5 | −0,5 | −0,6 |
 
-Num segundo artigo, a marca foi de 1,6 / 3,9 / 4,4 para 0,2 / 0,6 / 0,8 no padrão. Todas as variantes testadas
+Num segundo artigo, a marca foi de 2,7 / 3,4 / 3,9 para 0,1 / 0,2 / −0,1 no padrão. Todas as variantes testadas
 ficaram com |z| < 2, inclusive a lista verde fixa, graças à troca de sinônimos no redator.
 
 Para repetir: `python bench/marca_teste.py artigo.md -m anthropic:claude-haiku-4-5`.
