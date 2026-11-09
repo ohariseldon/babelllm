@@ -268,6 +268,10 @@ def make_pieces(md: str, max_words: int) -> list[Piece]:
 
     for blk in split_blocks(md):
         w = _WRAP.match(blk.strip())
+        if w and len(w.group(2).split()) < 15:  # nota curta em itálico ("*Estimado a partir de...*"): intacta
+            flush()
+            pieces.append(Piece(blk, False))
+            continue
         if w and _is_text(w.group(2)):  # linha fina em itálico/negrito: trecho próprio, volta com a mesma ênfase
             flush()
             pieces.append(Piece(w.group(2), True, heading, wrap=w.group(1)))
@@ -413,6 +417,10 @@ _DROP = {
 _KEEP_TOKEN = re.compile(r"https?://\S+|\[[\d,–\- ]+\]|\([^()]{0,60}?\d{4}[a-z]?\)|\S+")
 
 
+_NOT_NOUN = {"mais", "menos", "apenas", "depois", "antes", "pois", "após", "através", "nós", "vós", "jamais",
+             "quase", "talvez", "ambos", "ambas", "todos", "todas", "outros", "outras", "eles", "elas", "seus", "suas",
+             "os", "as", "dos", "das", "nos", "nas", "aos", "às", "pelos", "pelas", "es", "seus", "estes", "estas", "esses",
+             "essas", "anos", "meses", "dias", "pontos", "vezes"}
 _GLUE = {"de", "do", "da", "dos", "das", "em", "no", "na", "of", "in"}
 
 
@@ -790,6 +798,14 @@ class Vault:
         text = re.sub(r"(\{N[a-z]{2}\})\s+([\wÀ-ÿ%]+)(?![\wÀ-ÿ])", unit, text)
         text = re.sub(r"(?<=[\wÀ-ÿ}%]) (\{A[a-z]{2}\})(?=[.,;:)]|$)",
                       lambda m: m.group(0) if self._prev_ok(text, m) else " em " + m.group(1), text)
+        def de(m):
+            c, nxt = m.group(1), m.group(2)
+            v = self.back.get(c, "")
+            if self.lang == "pt" and re.search(r"(?:mil|milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões))$", v) \
+                    and nxt.lower() not in _NOT_NOUN:
+                return f"{c} de {nxt}"
+            return m.group(0)
+        text = re.sub(r"(\{N[a-z]{2}\}) ([a-zà-ú]+s)(?![\wÀ-ÿ])", de, text)
         text = _CODE.sub(back, text)
         self.fake = len(_FAKE_CODE.findall(text))
         text = _FAKE_CODE.sub("", text)
@@ -861,7 +877,9 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             c2, retry, lost2 = clean(redator(P["reparo"] + codes_rule, P["reparo_user"].format(
                 x="; ".join(lost), n=where, t=coded), max_tokens=cap))
             grew = len(c2.split()) - len(coded.split())
-            if len(lost2) < len(lost) and -0.2 * len(coded.split()) < grew <= 6 * len(lost) + 8:
+            glued = any(re.search(r",(?:\s+[\wÀ-ÿ]+){0,2}\s+" + re.escape(c) + r"\s*[.!?]", c2)
+                        for c in lost if c.startswith("{"))
+            if not glued and len(lost2) < len(lost) and -0.2 * len(coded.split()) < grew <= 6 * len(lost) + 8:
                 coded, draft, lost = c2, retry, lost2
             else:
                 p.marks, p.coverage = st
@@ -878,7 +896,11 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         p.out = out
         if vault and vault.fake:
             lost = lost + ["(palavra trocada por um código inventado)"]
-        p.lost = missing(need, out) + ([vault.back.get(c, c) for c in lost if vault.back.get(c, c) not in need] if vault else [])
+        miss = missing(need, out)
+        extra = [vault.back.get(c, c) for c in lost] if vault else []
+        extra = [v for v in extra if v.startswith("(") and "código inventado" in v or not (
+            _norm(v) in _norm(out) or any(m in v for m in miss))]
+        p.lost = miss + extra
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
         p.out = p.wrap + p.text + p.wrap

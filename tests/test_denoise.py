@@ -238,7 +238,7 @@ def test_echoed_headings_are_removed():
 
 
 def test_lead_keeps_italic_byline_and_sources_untouched():
-    md = ("# Título\n\n*Em 2024 nasceram 2,39 milhões de brasileiros, o menor número.*\n\n"
+    md = ("# Título\n\n*Em 2024 nasceram 2,39 milhões de brasileiros, o menor número em 29 anos de registro nacional de nascidos vivos.*\n\n"
           "wasemu · Demografia · 3 de novembro de 2026\n\n"
           "Fontes: [SIDRA 5932](https://sidra.ibge.gov.br/tabela/5932), [6579](https://sidra.ibge.gov.br/tabela/6579).\n\n"
           "Texto comum do artigo com várias palavras para reescrever aqui.")
@@ -287,3 +287,17 @@ def test_codes_rule_lists_only_present_kinds():
     m = Cap(redator=red)
     d.process_piece(d.Piece("O IBGE contou 42 escolas.", True), "pt", None, m, None, names={"IBGE"})
     assert " P palavra" not in seen[0] and "A ano" not in seen[0] and "N número" in seen[0]
+
+
+def test_decode_inserts_de_between_scale_number_and_noun():
+    import random
+    v = d.Vault(random.Random(6))
+    v.encode("Nasceram 2,39 milhões de brasileiros e 3 escolas.", set())
+    c = v.fwd["2,39 milhões"]
+    out, _ = v.decode(f"Foram {c} nascimentos, {c} mais que antes.")
+    assert out.startswith("Foram 2,39 milhões de nascimentos, 2,39 milhões mais")
+
+
+def test_short_italic_note_untouched():
+    ps = d.make_pieces("Texto comum do artigo com várias palavras aqui.\n\n*Estimado a partir dos óbitos de 2019.*", 150)
+    assert ps[-1].text == "*Estimado a partir dos óbitos de 2019.*" and not ps[-1].rewrite
