@@ -23,7 +23,7 @@ class H(BaseHTTPRequestHandler):
                     "the","of","and","to","in","a","an","that","for","with","is","are","which","such","as","by"}
             out = "\n".join(" ".join(w for w in l.split() if w.lower() not in stop) for l in out.splitlines())
         elif sysm.startswith(("Escreva", "Write")):
-            out = " ".join(l.lstrip("- ").strip() for l in text.splitlines() if l.startswith("-"))
+            out = " ".join(re.sub(r"^(\[lista\] |\[list\] )?- ", "", l).strip() for l in text.splitlines() if l.strip())
         else:
             out = text
         m = re.search(r"um a cada (\d+) palavras|once every (\d+) words", sysm)
