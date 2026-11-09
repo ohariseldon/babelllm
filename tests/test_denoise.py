@@ -326,3 +326,18 @@ def test_pair_check_catches_swapped_years_and_retry_fixes():
     p = d.process_piece(d.Piece("Foi de 2,43 milhões em 2019 para 2,12 milhões em 2024.", True), "pt", None, m, None,
                         rng=random.Random(8))
     assert "2019 eram 2,43 milhões" in p.out and not any("par trocado" in x for x in p.lost)
+
+
+def test_prosa_mode_sends_coded_prose_not_notes():
+    seen = []
+    def red(u):
+        seen.append(u)
+        return "Reescrito."
+    class Cap(Fake):
+        def __call__(self, system, user, max_tokens=0):
+            if system.startswith("Reescreva"):
+                seen.append(user)
+                return "Reescrito."
+            return super().__call__(system, user, max_tokens)
+    p = d.process_piece(d.Piece("Foram 817 mil crianças a menos em 2024.", True), "pt", "prosa", Cap(redator=red), None)
+    assert "a menos" in seen[0] and "817" not in seen[0] and p.out == "Reescrito."

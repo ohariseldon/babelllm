@@ -351,6 +351,10 @@ PROMPTS = {
                     "parágrafo; '[lista]' = item com '- '. Números, nomes, citações e URLs exatos. Não acrescente fatos, "
                     "causas, exemplos nem opiniões; tom sóbrio, sem palavras pomposas; tamanho parecido com o pedido. "
                     "Sem títulos. Só o texto."),
+        "redator_prosa": ("Reescreva em português do Brasil, como prosa de artigo, o texto abaixo com outras palavras "
+                          "e outra construção de frase, dizendo exatamente o mesmo: mesmos fatos, mesmas relações entre "
+                          "eles (quem, quanto, quando, a mais ou a menos, causa), sem acrescentar nada. Frases de "
+                          "tamanhos variados, sem clichês de IA, tom sóbrio, sem títulos. Só o texto."),
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
@@ -382,6 +386,9 @@ PROMPTS = {
                     "varied sentence length, no AI stock phrases. Note block = paragraph; '[list]' = '- ' item. "
                     "Numbers, names, citations and URLs exact. Add no facts, causes, examples or opinions; plain tone; "
                     "length close to the one asked. No headings. Text only."),
+        "redator_prosa": ("Rewrite the English text below in other words and other sentence structure, saying exactly "
+                          "the same: same facts, same relations between them (who, how much, when, more or less, cause), "
+                          "adding nothing. Varied sentence length, no AI stock phrases, plain tone, no headings. Text only."),
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
@@ -901,7 +908,10 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         return s, final, lost_codes
 
     try:
-        if notas is None:
+        if notas == "prosa":  # o redator vê o texto codificado inteiro: mais fiel, menos distante do original
+            notes = src
+            w_sys = P["redator_prosa"] + w_sys[len(P["redator"]):]
+        elif notas is None:
             notes = local_notes(src, lang)
         else:
             notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
@@ -978,7 +988,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
     if not only_clean:
         todo = [(p, d["lang"], d["names"]) for d in docs for p in d["pieces"] if p.rewrite]
         if not jobs:  # API: tudo de uma vez. Ollama atende poucos pedidos por vez (OLLAMA_NUM_PARALLEL).
-            local = any(m is not None and m.provider == "ollama" for m in (notas, redator, revisao))
+            local = any(isinstance(m, Model) and m.provider == "ollama" for m in (notas, redator, revisao))
             jobs = 8 if local else max(1, min(256, len(todo)))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic, secret, names)
@@ -1017,7 +1027,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
     report["segundos"] = round(time.time() - t0, 2)
     seen = {}
     for m in (notas, redator, revisao):
-        if m is not None and id(m.usage) not in seen:
+        if isinstance(m, Model) and id(m.usage) not in seen:
             seen[id(m.usage)] = (m.spec, m.usage)
     report["uso"] = [{"modelo": s, "chamadas": u.calls, "tokens_entrada": u.tin, "tokens_saida": u.tout}
                      for s, u in seen.values()]
@@ -1044,7 +1054,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("-m", "--modelo", help="modelo redator (provedor:modelo); é o último a escrever")
     ap.add_argument("--redator", help="sinônimo de -m")
     ap.add_argument("--notas", default="local",
-                    help="quem faz as notas: 'local' (padrão, sem LLM, grátis) ou provedor:modelo")
+                    help="o que o redator recebe: 'local' (padrão: notas sem LLM, grátis), 'prosa' (o texto "
+                         "codificado inteiro, mais fiel em artigos com muitos números) ou provedor:modelo")
     ap.add_argument("--revisao", help="modelo de uma revisão extra depois do redator (padrão: nenhuma)")
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
@@ -1079,7 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
         pool: dict[str, Model] = {}
         mk = lambda s: pool.setdefault(s, Model(s, a.base_url, a.temperatura, rpm=a.rpm))
         redator = mk(spec)
-        notas = None if a.notas.lower() == "local" else mk(a.notas)
+        notas = None if a.notas.lower() == "local" else "prosa" if a.notas.lower() == "prosa" else mk(a.notas)
         revisao = mk(a.revisao) if a.revisao and a.revisao.lower() not in {"nao", "não", "no", "off"} else None
 
     files = expand(a.entradas)
