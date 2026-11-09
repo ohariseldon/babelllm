@@ -1,8 +1,7 @@
 # denoise.py (llmnoiser v0.5 leve)
 
 Um script só (`denoise.py`, biblioteca padrão do Python) que tira a marca d'água
-de LLM de um lote de artigos. Não é humanizador: o texto continua sendo seu,
-feito com ajuda de IA; o que sai é o carimbo estatístico do modelo de origem.
+de LLM de um ou de um lote de artigos, removendo o carimbo estatístico do modelo de origem.
 
 ## Uso
 
