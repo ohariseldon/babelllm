@@ -988,7 +988,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
     if not only_clean:
         todo = [(p, d["lang"], d["names"]) for d in docs for p in d["pieces"] if p.rewrite]
         if not jobs:  # API: tudo de uma vez. Ollama atende poucos pedidos por vez (OLLAMA_NUM_PARALLEL).
-            local = any(isinstance(m, Model) and m.provider == "ollama" for m in (notas, redator, revisao))
+            local = any(m is not None and not isinstance(m, str) and m.provider == "ollama" for m in (notas, redator, revisao))
             jobs = 8 if local else max(1, min(256, len(todo)))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic, secret, names)
@@ -1027,7 +1027,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
     report["segundos"] = round(time.time() - t0, 2)
     seen = {}
     for m in (notas, redator, revisao):
-        if isinstance(m, Model) and id(m.usage) not in seen:
+        if m is not None and not isinstance(m, str) and id(m.usage) not in seen:
             seen[id(m.usage)] = (m.spec, m.usage)
     report["uso"] = [{"modelo": s, "chamadas": u.calls, "tokens_entrada": u.tin, "tokens_saida": u.tout}
                      for s, u in seen.values()]
