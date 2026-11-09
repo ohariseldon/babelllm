@@ -98,7 +98,7 @@ A volta é exata. Custa fluidez.
 | `--marcadores N` | 0 a 10 marcadores removíveis por 10 palavras (padrão 0) |
 | `--sigilo basico\|nomes\|forte\|nao` | o que vai como código para a API (padrão `basico`; `nomes` deixa os números em claro) |
 | `--manter-logica` | não reorganiza ideias nem troca sinônimos |
-| `--notas prosa\|local\|provedor:modelo` | o que o redator recebe: o texto codificado (padrão, o mais fiel), notas locais ou notas de um modelo |
+| `--notas prosa\|fatos\|local\|provedor:modelo` | o que o redator recebe: o texto codificado (padrão, o mais fiel); `fatos`: o redator resume o trecho em fatos e reescreve de um ponto de vista e agrupamento sorteados (muda o enquadramento, contra detectores de sentido; 1 chamada a mais por trecho); notas locais ou notas de um modelo |
 | `--verificar provedor:modelo` | juiz que confere o sentido de cada trecho e manda refazer o que inverteu (~1 chamada a mais por trecho) |
 | `--revisao provedor:modelo` | um passe extra de correção depois do redator |
 | `--rpm N` | teto de pedidos por minuto (ex.: 15 no plano grátis do Gemini) |
