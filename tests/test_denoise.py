@@ -179,7 +179,7 @@ def test_sigilo_lost_code_reported_and_retry_uses_codes_only():
         return "Texto sem os códigos."
     m = Fake(redator=red)
     p = d.process_piece(d.Piece("O IBGE contou 42 escolas.", True), "pt", None, m, None, names={"IBGE"})
-    assert len(calls) == 2 and "42" not in calls[1] and "IBGE" not in calls[1]
+    assert len(calls) == 3 and all("42" not in c and "IBGE" not in c for c in calls[1:])
     assert "42" in p.lost and "IBGE" in p.lost
 
 
@@ -210,4 +210,4 @@ def test_gate_halves_on_concurrency_error_and_recovers():
     g.busy = 0
     for _ in range(40):
         g.success()
-    assert g.limit == 22
+    assert g.limit == 30

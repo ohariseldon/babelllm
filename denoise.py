@@ -530,10 +530,10 @@ class Gate:
     """Limite adaptativo de pedidos simultâneos de um modelo (AIMD).
 
     Começa sem teto prático; quando a API recusa por excesso de pedidos simultâneos
-    (429 "concurrent"), corta o teto pela metade; a cada 20 respostas boas, sobe 1."""
+    (429 "concurrent"), corta o teto pela metade; a cada 4 respostas boas, sobe 1."""
 
     def __init__(self, start: int = 256):
-        self.cv, self.limit, self.busy, self.ok = threading.Condition(), start, 0, 0
+        self.cv, self.limit, self.busy, self.ok, self.cut_at = threading.Condition(), start, 0, 0, 0.0
 
     def __enter__(self):
         with self.cv:
@@ -549,12 +549,17 @@ class Gate:
     def success(self):
         with self.cv:
             self.ok += 1
-            if self.ok % 20 == 0 and self.limit < 256:
+            if self.ok % 4 == 0 and self.limit < 256:
                 self.limit += 1
+                self.cv.notify_all()
 
     def too_many(self):
+        """Corta pela metade no máximo uma vez a cada 3 s: uma rajada de 429 conta como um corte só."""
         with self.cv:
-            self.limit = max(2, min(self.limit, self.busy) // 2)
+            now = time.monotonic()
+            if now - self.cut_at >= 3:
+                self.limit = max(4, min(self.limit, self.busy + 1) // 2)
+                self.cut_at = now
 
 
 class Limiter:
@@ -730,6 +735,7 @@ class Vault:
                     return v
             return ""
         text = _CODE.sub(back, text)
+        text = re.sub(r"\{([^{}\n]{1,60})\}", r"\1", text)  # {Palavra} que o modelo inventou: tira as chaves
         return re.sub(r"[ \t]{2,}", " ", text), [c for c in self.back if c not in seen]
 
 
@@ -766,7 +772,9 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
         coded, draft, lost = clean(redator(w_sys, head + notes, max_tokens=cap))
-        if lost:  # reparo: o redator insere só o que faltou, no texto que já escreveu
+        for _ in range(2 if lost else 0):  # reparo: o redator insere só o que faltou, no texto que já escreveu
+            if not lost:
+                break
             st = (p.marks, p.coverage)
             where = "\n".join(l for l in notes.splitlines() if any(x in l for x in lost)) or notes
             c2, retry, lost2 = clean(redator(P["reparo"] + codes_rule, P["reparo_user"].format(
