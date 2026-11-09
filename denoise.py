@@ -339,7 +339,9 @@ PROMPTS = {
                    "Responda só com o texto completo corrigido."),
         "reparo_user": "Itens que faltam: {x}\n\nNotas onde eles aparecem:\n{n}\n\nTexto:\n{t}",
         "logica": (" Reorganize a lógica do parágrafo: mude a ordem das ideias, junte ou divida frases, inverta "
-                   "causa e efeito ou geral e exemplo quando o sentido permitir."),
+                   "causa e efeito ou geral e exemplo quando o sentido permitir. Troque por sinônimos ou outra formulação "
+                   "pelo menos metade das palavras de conteúdo das notas (substantivos, verbos, adjetivos), "
+                   "menos os termos técnicos."),
         "codigos": (" Os códigos entre chaves ({N..} número, {E..} nome ou sigla, {Em..} masculino, {Ef..} feminino, "
                     "{L..} link, {C..} citação, {P..} palavra de sentido oculto) são opacos: use cada um exatamente "
                     "uma vez, copiado igual, sem traduzir, explicar ou inventar códigos. Um {P..} ocupa o lugar de uma "
@@ -360,7 +362,8 @@ PROMPTS = {
                    "as little else as possible. Keep every brace code already present. Reply with the full corrected text only."),
         "reparo_user": "Missing items: {x}\n\nNotes where they appear:\n{n}\n\nText:\n{t}",
         "logica": (" Reorganize the paragraph's logic: change the order of ideas, merge or split sentences, swap "
-                   "cause and effect or general and example where the meaning allows."),
+                   "cause and effect or general and example where the meaning allows. Replace at least half of the notes' "
+                   "content words (nouns, verbs, adjectives) with synonyms or other phrasing, except technical terms."),
         "codigos": (" The codes in braces ({N..} number, {E..} name or acronym, {L..} link, {C..} citation) are "
                     "opaque: use each exactly once, copied verbatim, never translate, explain or invent codes."),
         "marcas": (" While writing, insert the symbol ¦ between words, on average once every {k} words, spread "
