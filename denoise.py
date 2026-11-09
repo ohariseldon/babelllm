@@ -55,7 +55,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 # ---------------------------------------------------------------- Unicode
 
@@ -383,7 +383,8 @@ PROMPTS = {
         "enquadre": {
             "base": (" Ponto de vista deste trecho, sorteado: {v}. Agrupe as ideias assim: {g}. Escreva a partir só "
                      "dos fatos da lista, com enquadramento seu; não copie a ordem da lista nem invente exemplo, "
-                     "causa ou número."),
+                     "causa ou número. O sujeito de cada fato continua o mesmo (o país não vira cidade; quem mede ou "
+                     "data não vira o que é medido). Escreva {p}."),
             "vista": ["como um repórter que relata o que foi medido", "como um analista explicando a um cliente",
                       "como uma nota técnica seca", "como quem conversa com um leitor leigo, sem gíria",
                       "como um editor que resume para a primeira página", "como um professor que dá contexto"],
@@ -460,7 +461,8 @@ PROMPTS = {
         "enquadre": {
             "base": (" Point of view for this passage, drawn at random: {v}. Group the ideas this way: {g}. Write only "
                      "from the facts in the list, with your own framing; do not copy the list order or invent examples, "
-                     "causes or numbers."),
+                     "causes or numbers. Each fact keeps its subject (a country does not become a city; whoever measures "
+                     "or dates something does not become the thing measured). Write {p}."),
             "vista": ["as a reporter telling what was measured", "as an analyst explaining to a client",
                       "as a dry technical note", "as someone talking to a lay reader, no slang",
                       "as an editor summing up for the front page", "as a teacher giving context"],
@@ -1142,7 +1144,10 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                     if sent and sent not in notes:
                         notes += "\n- " + sent.strip()
             Q, r = P["enquadre"], rng or _rng
-            frame = Q["base"].format(v=r.choice(Q["vista"]), g=r.choice(Q["grupo"]))
+            n_par = len([b for b in p.text.split("\n\n") if b.strip()])
+            par = (f"{n_par} parágrafos separados por linha em branco" if n_par > 1 else "um parágrafo") if lang == "pt" \
+                else (f"{n_par} paragraphs separated by a blank line" if n_par > 1 else "one paragraph")
+            frame = Q["base"].format(v=r.choice(Q["vista"]), g=r.choice(Q["grupo"]), p=par)
         elif notas is None:
             notes = local_notes(src, lang)
         else:
@@ -1222,6 +1227,14 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         if lang == "pt":  # palavras de Portugal que soam estranhas no Brasil
             out = re.sub(r"(?<![\wÀ-ÿ])(" + "|".join(_PT_PT) + r")(?![\wÀ-ÿ])",
                          lambda m: _PT_PT[m.group(1)], out)
+        if lang == "pt":  # "entre em 2015 e em 2016", "desde em 2010": preposição dobrada antes do ano
+            out = re.sub(r"(?<![\wÀ-ÿ])(entre|desde|até|durante|após|para|de) em (?=\d{4}(?!\d))", r"\1 ", out,
+                         flags=re.I)
+            out = re.sub(r"(?<![\wÀ-ÿ])(entre (?:\d{4}|[\wÀ-ÿ]+ de \d{4})) e em (?=\d{4}(?!\d))", r"\1 e ", out)
+            out = re.sub(r"(?<![\wÀ-ÿ])(milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões)) ([a-zà-ú]{3,}s)(?![\wÀ-ÿ])",
+                         lambda m: m.group(0) if m.group(2) in _NOT_NOUN or m.group(2) in {"de", "em"}
+                         or (m.group(2) not in _UNITS and re.search(r"(?:ad|id)[oa]s$", m.group(2)))
+                         else f"{m.group(1)} de {m.group(2)}", out)
         if "—" not in p.text:  # travessão que o original não tinha: vira vírgula
             out = re.sub(r"\s*—\s*", ", ", out)
             out = re.sub(r",\s*([.;:!?])", r"\1", out)
