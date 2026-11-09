@@ -388,11 +388,23 @@ def test_meaning_retry_and_judge():
     assert p.out == "A taxa 5% subiu em 2020." and len(calls) == 2 and "mudaram de sentido" in calls[1]
     class J:
         def __call__(self, system, user, max_tokens=0):
-            return "OK" if "subiu" in user.split("REESCRITA:")[1] else "- A taxa subiu"
+            return "OK" if "subiu" in user.split("REESCRITA:")[1] else "Comparando as duas versões:\n- A taxa {Nab} subiu."
     assert d.judge(J(), "A taxa {Nab} subiu.", "A taxa {Nab} subiu.", "pt") == []
-    assert d.judge(J(), "A taxa {Nab} subiu.", "A taxa {Nab} caiu.", "pt") == ["A taxa subiu"]
+    assert d.judge(J(), "A taxa {Nab} subiu.", "A taxa {Nab} caiu.", "pt") == ["A taxa {Nab} subiu."]
 
 
 def test_homoglyphs_folded_only_in_mixed_words():
     t, n = d.strip_invisible("O Bаnco subiu. Россия fica.")
     assert t == "O Banco subiu. Россия fica." and n == 1
+
+
+def test_form_issues_and_dash_and_em_rules():
+    assert d.form_issues("- a\n- b\n- c", "a, b e c.", "pt")
+    assert d.form_issues("Texto.", "Será?  Sim.", "pt")
+    assert d.form_issues("- a\n- b", "- x\n- y", "pt") == []
+    import random
+    v = d.Vault(random.Random(11))
+    v.encode("Em 2024 nasceram 2,86 milhões em 2010.", set())
+    a, n = v.fwd["2024"], v.fwd["2,86 milhões"]
+    out, _ = v.decode(f"Durante {a}, foram {n} bebês.")
+    assert out == "Durante 2024, foram 2,86 milhões de bebês."

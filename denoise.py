@@ -382,15 +382,17 @@ PROMPTS = {
                           "e outra construção de frase, dizendo exatamente o mesmo: mesmos fatos, mesmas relações entre "
                           "eles (quem, quanto, quando, a mais ou a menos, causa), sem acrescentar nada. Frases de "
                           "tamanhos variados, sem clichês de IA, tom sóbrio, sem títulos, sem alongar e sem omitir nenhum item, nome ou número. "
-                          "Só o texto."),
+                          "Lista continua lista: um item por linha com '- ', mesmo número de itens. Sem travessão (use "
+                          "vírgula ou ponto) e sem perguntas. Só o texto."),
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
         "secao": "(contexto, não escreva: seção «{h}»)\n\n", "faltou": "\n\nInclua também: {x}",
-        "tamanho": "\n\n(cerca de {n} palavras)",
+        "tamanho": "\n\n(cerca de {n} palavras; frases com média de {f} palavras, misturando curtas de 5 a 8 com "
+                    "longas de 20 a 25)",
         "sentido": "\n\nAtenção, numa versão anterior estas frases mudaram de sentido; mantenha a direção (sobe/desce, "
                    "sim/não, antes/depois) exatamente como no original: {x}",
-        "juiz": ("Você compara um ORIGINAL com uma REESCRITA. Os códigos entre chaves são opacos. Liste, uma por linha, "
-                 "cada frase do original que a reescrita contradiz (sentido invertido, número ou ano trocado de papel, "
+        "juiz": ("Você compara um ORIGINAL com uma REESCRITA. Os códigos entre chaves são opacos. Copie, uma por linha "
+                 "e sem comentário, cada frase do original que a reescrita contradiz (sentido invertido, número ou ano trocado de papel, "
                  "quem fez o quê trocado, causa inventada) ou omite. Paráfrase com outras palavras e outra ordem não é "
                  "problema. Antes de apontar, pergunte: as duas podem ser verdade ao mesmo tempo? Se nada estiver "
                  "errado, responda só OK."),
@@ -437,14 +439,17 @@ PROMPTS = {
         "redator_prosa": ("Rewrite the English text below in other words and other sentence structure, saying exactly "
                           "the same: same facts, same relations between them (who, how much, when, more or less, cause), "
                           "adding nothing. Varied sentence length, no AI stock phrases, plain tone, no headings, no padding and no item, name or number left out "
-                          "(keep every item). Text only."),
+                          "(keep every item). A list stays a list: one '- ' item per line, same number of items. No em dashes (use "
+                          "commas or periods) and no questions. Text only."),
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
-        "tamanho": "\n\n(about {n} words)",
+        "tamanho": "\n\n(about {n} words; sentences averaging {f} words, mixing short ones of 5 to 8 with long "
+                    "ones of 20 to 25)",
         "sentido": "\n\nCareful, in an earlier version these sentences changed meaning; keep the direction (up/down, "
                    "yes/no, before/after) exactly as in the original: {x}",
-        "juiz": ("You compare an ORIGINAL with a REWRITE. Brace codes are opaque. List, one per line, each original "
+        "juiz": ("You compare an ORIGINAL with a REWRITE. Brace codes are opaque. Copy, one per line and with no "
+                 "comment, each original "
                  "sentence the rewrite contradicts (meaning reversed, number or year in the wrong role, who did what "
                  "swapped, invented cause) or leaves out. Paraphrase in other words and order is fine. Before flagging, "
                  "ask: could both be true at the same time? If nothing is wrong, reply only OK."),
@@ -846,7 +851,9 @@ class Vault:
 
 
     _PREP = {"em", "de", "desde", "até", "a", "e", "ou", "entre", "para", "após", "antes", "partir", "ano", "anos",
-             "no", "do", "dos", "da", "in", "of", "since", "until", "by", "from", "to", "and", "or", "year", "como"}
+             "no", "do", "dos", "da", "in", "of", "since", "until", "by", "from", "to", "and", "or", "year", "como",
+             "durante", "sobre", "sob", "contra", "ao", "aos", "nos", "na", "nas", "das", "pelo", "pela", "segundo",
+             "conforme", "que", "até", "rumo", "ante", "perante", "during", "after", "before", "around", "about"}
 
     def _prev_ok(self, text, m) -> bool:
         prev = re.findall(r"[\wÀ-ÿ{}%]+", text[:m.start()])[-1:]
@@ -883,7 +890,8 @@ class Vault:
         def de(m):
             c, nxt = m.group(1), m.group(2)
             v = self.back.get(c, "")
-            if self.lang == "pt" and c in self.de_after and nxt.lower() not in _NOT_NOUN \
+            scale = re.search(r"(?:milh(?:ão|ões)|bilh(?:ão|ões)|trilh(?:ão|ões))$", v)
+            if self.lang == "pt" and (c in self.de_after or scale) and nxt.lower() not in _NOT_NOUN \
                     and not re.search(r"(?:ad|id)[oa]s$", nxt.lower()):
                 return f"{c} de {nxt}"
             return m.group(0)
@@ -989,6 +997,27 @@ def _polarity(sent: str, lang: str) -> tuple[bool, tuple[int, ...]]:
     return neg, sides
 
 
+_LIST_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s", re.M)
+
+
+def _mean_sent(text: str) -> int:
+    ss = [len(x.split()) for x in re.split(r"(?<=[.!?;])\s+", text) if x.strip()]
+    return max(8, round(sum(ss) / len(ss))) if ss else 14
+
+
+def form_issues(src: str, out: str, lang: str) -> list[str]:
+    """Forma que o redator não pode mudar: listas viram prosa, pergunta que não existia."""
+    pt = lang == "pt"
+    issues = []
+    n_src, n_out = len(_LIST_LINE.findall(src)), len(_LIST_LINE.findall(out))
+    if n_src >= 2 and n_out < n_src:
+        issues.append(f"(a lista de {n_src} itens tem de continuar lista, um item por linha com '- ')" if pt else
+                      f"(the {n_src}-item list must stay a list, one '- ' item per line)")
+    if "?" not in src and "?" in out:
+        issues.append("(sem perguntas: escreva como afirmação)" if pt else "(no questions: write statements)")
+    return issues
+
+
 def flipped_claims(src: str, out: str, lang: str) -> list[str]:
     """Frases do original cuja direção mudou na saída. O alinhamento é pelos códigos: a frase da saída que
     contém todos os códigos da frase original é a mesma afirmação. Sem código, a frase não é checada."""
@@ -1064,7 +1093,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         else:
             notes = notas(P["notas"] + codes_rule, head + src, max_tokens=64 + len(p.text.split()) * 2)
         cap = int((200 + len(p.text.split()) * 3) * (1 + marks / 10))
-        size = P["tamanho"].format(n=len(p.text.split()))
+        size = P["tamanho"].format(n=len(p.text.split()), f=_mean_sent(p.text))
         coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
         pairs = code_pairs(src) if vault else []
         bad = broken_pairs(pairs, coded)
@@ -1092,7 +1121,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             else:
                 p.marks, p.coverage = st
         flips = flipped_claims(src, coded, lang) if vault else []
-        issues = list(flips)
+        issues = list(flips) + form_issues(src, coded, lang)
         if verify is not None and vault:  # juiz opcional: compara original e saída, ambos ainda codificados
             issues += judge(verify, src, coded, lang)
         if issues:  # sentido invertido ou contradição: refaz uma vez, dizendo o que conferir
@@ -1100,12 +1129,12 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
             hint = P["sentido"].format(x=" | ".join(issues[:4]))
             c2, d2, l2 = clean(redator(w_sys, head + notes + size + hint, max_tokens=cap))
             f2 = flipped_claims(src, c2, lang)
-            i2 = f2 + (judge(verify, src, c2, lang) if verify is not None else [])
+            i2 = f2 + form_issues(src, c2, lang) + (judge(verify, src, c2, lang) if verify is not None else [])
             if len(i2) < len(issues) and len(l2) <= len(lost) and len(broken_pairs(pairs, c2)) <= len(bad):
                 coded, draft, lost, flips, issues = c2, d2, l2, f2, i2
             else:
                 p.marks, p.coverage = st
-        p.meaning = [vault.decode(x)[0] for x in issues] if vault else []
+        p.meaning = [vault.decode(x)[0] for x in issues if not x.startswith("(")] if vault else []
         out = draft
         if revisao is not None:
             p.marks, p.coverage = 0, 0.0
@@ -1114,6 +1143,9 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
                 out, lost = fixed, lost3
             else:  # ficou a versão do redator, que não tinha marcadores
                 p.marks, p.coverage = 0, 0.0
+        if "—" not in p.text:  # travessão que o original não tinha: vira vírgula
+            out = re.sub(r"\s*—\s*", ", ", out)
+            out = re.sub(r",\s*([.;:!?])", r"\1", out)
         if p.wrap:
             out = p.wrap + " ".join(out.split()) + p.wrap
         p.out = out
@@ -1142,10 +1174,19 @@ def judge(model, src: str, out: str, lang: str) -> list[str]:
         r = model(P["juiz"], P["juiz_user"].format(a=src, b=out), max_tokens=200)
     except Exception:  # noqa: BLE001 - o juiz é opcional; se falhar, segue
         return []
-    lines = [l.strip(" -*•\t") for l in r.strip().splitlines() if l.strip()]
-    if not lines or lines[0].upper().startswith("OK"):
+    if r.strip().upper().startswith("OK"):
         return []
-    return [l for l in lines if l.upper() not in {"PROBLEMAS:", "PROBLEMS:"}][:4]
+    sents = [x for x in re.split(r"(?<=[.!?;])\s+", src) if len(x.split()) >= 3]
+    words = lambda t: set(re.findall(r"\{[^}]+\}|[\wÀ-ÿ]{3,}", t.lower()))
+    found = []
+    for l in r.splitlines():  # só conta a linha que cita uma frase do original; raciocínio do juiz é ignorado
+        w = words(l)
+        if len(w) < 3:
+            continue
+        best = max(sents, key=lambda s: len(w & words(s)) / max(1, len(words(s))), default=None)
+        if best and len(w & words(best)) >= 0.6 * len(words(best)) and best not in found:
+            found.append(best)
+    return found[:4]
 
 
 _rng = __import__("random").SystemRandom()
@@ -1228,6 +1269,11 @@ def expand(paths: list[str]) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows (cp1252): troca o caractere, não quebra
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="Tira a marca d'água de LLM de artigos, em lote.")
     ap.add_argument("entradas", nargs="+", help="arquivos ou pastas (.md .txt .docx .pdf)")
     ap.add_argument("-o", "--saida", default="limpos", help="pasta de saída (padrão: limpos/)")
@@ -1288,6 +1334,8 @@ def main(argv: list[str] | None = None) -> int:
               max(0.0, min(10.0, a.marcadores)), not a.manter_logica,
               False if (a.sem_sigilo or a.sigilo == "nao") else (a.sigilo if a.sigilo in ("forte", "nomes") else True),
               verify)
+    if a.relatorio:  # antes de imprimir: um console que não aceita algum caractere não pode perder o relatório
+        Path(a.relatorio).write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
     for f in rep["arquivos"]:
         flag = " ERRO" if f["trechos_com_erro"] else ""
         lost = f" perdeu: {', '.join(f['itens_perdidos'][:5])}" if f["itens_perdidos"] else ""
@@ -1298,8 +1346,6 @@ def main(argv: list[str] | None = None) -> int:
     for u in rep["uso"]:
         print(f"{u['modelo']}: {u['chamadas']} chamadas, {u['tokens_entrada']} tokens in, {u['tokens_saida']} out")
     print(f"{len(files)} arquivos em {rep['segundos']}s")
-    if a.relatorio:
-        Path(a.relatorio).write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
     return 1 if any(f["trechos_com_erro"] for f in rep["arquivos"]) else 0
 
 
