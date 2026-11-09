@@ -179,3 +179,13 @@ def test_sigilo_lost_code_reported_and_retry_uses_codes_only():
     p = d.process_piece(d.Piece("O IBGE contou 42 escolas.", True), "pt", None, m, None, names={"IBGE"})
     assert len(calls) == 2 and "42" not in calls[1] and "IBGE" not in calls[1]
     assert "42" in p.lost and "IBGE" in p.lost
+
+
+def test_sigilo_forte_hides_direction_and_round_trips():
+    import random
+    md = "A inflação subiu 2% e o desemprego caiu, mas o salário não acompanhou. Rates rose; jobs fell."
+    v = d.Vault(random.Random(3), strong=True)
+    enc = v.encode(md, set())
+    for w in ("subiu", "caiu", "não", "rose", "fell"):
+        assert w not in enc
+    assert v.decode(enc) == (md, [])

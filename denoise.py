@@ -337,8 +337,9 @@ PROMPTS = {
         "logica": (" Reorganize a lógica do parágrafo: mude a ordem das ideias, junte ou divida frases, inverta "
                    "causa e efeito ou geral e exemplo quando o sentido permitir."),
         "codigos": (" Os códigos entre chaves ({N..} número, {E..} nome ou sigla, {Em..} masculino, {Ef..} feminino, "
-                    "{L..} link, {C..} citação) são opacos: use cada um exatamente uma vez, copiado igual, "
-                    "sem traduzir, explicar ou inventar códigos."),
+                    "{L..} link, {C..} citação, {P..} palavra de sentido oculto) são opacos: use cada um exatamente "
+                    "uma vez, copiado igual, sem traduzir, explicar ou inventar códigos. Um {P..} ocupa o lugar de uma "
+                    "palavra só e mantém a função dela na nota (verbo continua verbo, advérbio continua advérbio)."),
         "marcas": (" Enquanto escreve, insira o símbolo ¦ entre palavras, em média um a cada {k} palavras, "
                    "espalhado também no meio das frases. Ele será apagado depois; não o explique."),
     },
@@ -580,7 +581,19 @@ _CITE = re.compile(r"\([A-ZÀ-Ú][^()\n]{0,60}?\d{4}[a-z]?\)|\[\d+(?:[,–-]\s*\
 _NUM = re.compile(r"(?<![{\w])(?:R\$\s?|US\$\s?)?\d+(?:[.,]\d+)*(?:\s?%)?")
 _CAP = r"[A-ZÀ-Ý][\wÀ-ÿ'’-]*"
 _NAME = re.compile(r"(?<![{\w])" + _CAP + r"(?: (?:de |da |do |dos |das |of |the )?" + _CAP + r")*")
-_CODE = re.compile(r"\{[NELC][mf]?[a-z]{2}\}")
+_CODE = re.compile(r"\{[NELCP][mf]?[a-z]{2}\}")
+# Sigilo forte: palavras que dão direção ou polaridade ao fato (subiu/caiu, mais/menos, não...).
+_POL = re.compile(r"(?<![{\w])(?:" + "|".join([
+    r"n[ãa]o", r"nunca", r"jamais", r"nenhuma?", r"nada",
+    r"sub(?:iu|iram|ia|iam|indo|ir|ido|ida|ir[áa]|e|em)", r"ca(?:iu|[íi]ram|[íi]a|[íi]am|indo|ir|[íi]do|i|em)",
+    r"cresc\w*", r"aument\w*", r"diminu\w*", r"redu[zç]\w*", r"recu\w*", r"avan[çc]\w*", r"encolh\w*",
+    r"dobr\w*", r"triplic\w*", r"despenc\w*", r"dispar\w*", r"piora\w*", r"piore\w*", r"melhora\w*", r"melhore\w*",
+    r"mais", r"menos", r"maior(?:es)?", r"menor(?:es)?", r"melhor(?:es)?", r"pior(?:es)?", r"acima", r"abaixo",
+    r"alta", r"altas", r"queda", r"quedas", r"recorde",
+    r"not", r"never", r"no", r"none", r"rose", r"rise[sn]?", r"rising", r"fell", r"fall(?:s|en|ing)?",
+    r"increase[sd]?", r"decrease[sd]?", r"grew", r"grow(?:s|n|ing)?", r"declin\w*", r"more", r"less", r"fewer",
+    r"higher", r"lower", r"better", r"worse", r"above", r"below", r"record",
+]) + r")(?![\wÀ-ÿ])", re.I)
 _SENT_START = re.compile(r"(?:^|[.!?:;]\s+|\n\s*(?:[-*+>]\s+|\d+[.)]\s+|\*+)?|\*+|[(\"«“—–|·]\s*)$")
 
 
@@ -609,8 +622,8 @@ class Vault:
     O modelo só vê {Nxy}, {Exy}, {Lxy}, {Cxy}: não sabe os valores, não faz conta nem
     "corrige" fatos, e a API nunca recebe os dados reais. O script destroca no fim."""
 
-    def __init__(self, rng):
-        self.rng, self.fwd, self.back = rng, {}, {}
+    def __init__(self, rng, strong: bool = False):
+        self.rng, self.fwd, self.back, self.strong = rng, {}, {}, strong
 
     def _code(self, kind: str, value: str) -> str:
         if value in self.fwd:
@@ -638,7 +651,10 @@ class Vault:
             prev = (text[:m.start()] + " " + lead).split()[-1:] or [""]
             return (lead + " " if lead else "") + self._one(w, prev[0])
 
-        return _NAME.sub(name, text)
+        text = _NAME.sub(name, text)
+        if self.strong:  # cada forma ("subiu", "Subiu") vira um código próprio: a volta é exata
+            text = _POL.sub(lambda m: self._code("P", m.group(0)), text)
+        return text
 
     def _one(self, w: str, prev: str) -> str:
         if w in self.fwd:
@@ -676,7 +692,7 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
     P = PROMPTS[lang]
     head = P["secao"].format(h=p.heading) if p.heading else ""
     need = must_keep(p.text)
-    vault = Vault(rng or _rng) if secret else None
+    vault = Vault(rng or _rng, strong=(secret == "forte")) if secret else None
     src = vault.encode(p.text, names or set()) if vault else p.text
     codes_rule = P["codigos"] if vault and vault.back else ""
     mark_rule = P["marcas"].format(k=max(1, round(10 / marks))) if marks > 0 else ""
@@ -727,7 +743,7 @@ _rng = __import__("random").SystemRandom()
 
 def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | None, revisao: Model | None,
         jobs: int, max_words: int, fmt: str | None, only_clean: bool, lang_opt: str,
-        marks: float = 0.0, logic: bool = True, secret: bool = True) -> dict:
+        marks: float = 0.0, logic: bool = True, secret: bool | str = True) -> dict:
     outdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     docs = []
@@ -811,8 +827,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
                          "quanto mais, melhor a remoção da marca do próprio redator, e pior a fluidez). Padrão: 0")
-    ap.add_argument("--sem-sigilo", action="store_true",
-                    help="manda números, nomes, links e citações em claro (padrão: vão como códigos com chave)")
+    ap.add_argument("--sigilo", choices=["basico", "forte", "nao"], default="basico",
+                    help="basico (padrão): números, nomes, siglas, links e citações vão como códigos com chave; "
+                         "forte: também as palavras de direção e polaridade (subiu, caiu, mais, menos, não...); "
+                         "nao: tudo em claro")
+    ap.add_argument("--sem-sigilo", action="store_true", help="o mesmo que --sigilo nao")
     ap.add_argument("--manter-logica", action="store_true",
                     help="não pede ao redator para reorganizar a ordem das ideias e das frases")
     ap.add_argument("--base-url", help="endpoint para provedor compat/openai (OpenRouter, Groq, LM Studio...)")
@@ -843,7 +862,8 @@ def main(argv: list[str] | None = None) -> int:
     files = expand(a.entradas)
     rep = run(files, Path(a.saida), notas, redator, revisao, a.paralelo, a.palavras,
               "." + a.formato if a.formato else None, a.so_limpar, a.idioma,
-              max(0.0, min(10.0, a.marcadores)), not a.manter_logica, not a.sem_sigilo)
+              max(0.0, min(10.0, a.marcadores)), not a.manter_logica,
+              False if (a.sem_sigilo or a.sigilo == "nao") else ("forte" if a.sigilo == "forte" else True))
     for f in rep["arquivos"]:
         flag = " ERRO" if f["trechos_com_erro"] else ""
         lost = f" perdeu: {', '.join(f['itens_perdidos'][:5])}" if f["itens_perdidos"] else ""

@@ -72,7 +72,13 @@ não faz conta nem "corrige" fatos; o script destroca no fim. Se um código some
 tenta de novo pedindo o código (nunca o dado), e o que faltar sai em `itens_perdidos`.
 Nomes são as palavras com maiúscula no meio de frase que nunca aparecem em minúscula no
 artigo, mais as siglas. Ida e volta testada nos 269 trechos de 20 artigos reais: idêntica.
-Custa ~20% a mais de tokens de entrada. `--sem-sigilo` desliga.
+Custa ~20% a mais de tokens de entrada. `--sigilo nao` (ou `--sem-sigilo`) desliga.
+
+`--sigilo forte` também esconde as palavras de direção e polaridade (subiu, caiu, cresceu,
+mais, menos, maior, não, nunca, recorde; rose, fell, more, less, not...). O modelo escreve
+"a taxa {Pab} {Ncd}" sem saber se a taxa subiu ou caiu, e não tem como "raciocinar" sobre
+a conclusão. A volta é exata (cada forma da palavra tem seu código). O risco é de fluidez:
+o modelo escreve em volta de palavras que não conhece.
 
 ## Reorganização da lógica
 
@@ -115,7 +121,7 @@ Para repetir: `python bench/make_articles.py bench/artigos`, `python bench/mock_
 
 ## Testes
 
-`python -m pytest -q tests` (18 testes, sem rede).
+`python -m pytest -q tests` (19 testes, sem rede).
 
 ## O que saiu da v0.2 e por quê
 
