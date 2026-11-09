@@ -1,134 +1,188 @@
-# denoise.py (llmnoiser v0.5 leve)
+# babelllm
 
-Um script só (`denoise.py`, biblioteca padrão do Python) que tira a marca d'água
-de LLM de um lote de artigos. Não é humanizador: o texto continua sendo seu,
-feito com ajuda de IA; o que sai é o carimbo estatístico do modelo de origem.
+**Tira a marca d'água estatística de LLM dos seus artigos feitos com ajuda de IA, em lote, com um modelo barato à sua escolha.**
 
-## Uso
+*English summary below.*
+
+Você escreve com ajuda de IA e assume isso. O que você não quer é o carimbo invisível que alguns
+fornecedores embutem na escolha das palavras (marcas do tipo SynthID). O babelllm reescreve cada
+trecho a partir de notas, com um modelo que você escolhe (local, antigo ou barato), e entrega o mesmo
+conteúdo, com os mesmos números, sem a sequência de palavras que carrega a marca.
+
+- **Um arquivo só**, biblioteca padrão do Python, sem dependências obrigatórias.
+- **Rápido**: 20 artigos em ~38 s com Claude Haiku 4.5 (medido; ver [Resultados](#resultados)).
+- **Barato**: uma chamada de modelo por trecho de ~150 palavras.
+- **Sigilo**: números, nomes, siglas, links e citações vão para a API como códigos (`{Nkq}`, `{Exm}`)
+  e são destrocados no seu computador. A API nunca vê os dados.
+- **Qualquer modelo**: Ollama, OpenAI, Anthropic, Gemini, OpenRouter, Groq, LM Studio, vLLM.
+
+> **Não é um humanizador** e não promete enganar detectores de "texto de IA". O texto de saída
+> continua sendo escrito por um modelo. Ver [Limites](#limites).
+
+## Instalação
 
 ```bash
-# API barata (o redator é o último a escrever: não use o modelo que gerou o artigo)
-OPENAI_API_KEY=... python denoise.py artigos/ -o limpos/ -m openai:gpt-4o-mini
-
-# modelo local (o mais seguro contra marca; roda 8 trechos por vez)
-python denoise.py artigos/ -o limpos/ -m ollama:qwen2.5:7b-instruct
-
-# Gemini (chave em GEMINI_API_KEY)
-GEMINI_API_KEY=... python denoise.py artigos/ -o limpos/ -m gemini:gemini-2.5-flash
-
-# Claude antigo, OpenRouter/Groq/LM Studio (qualquer endpoint compatível com OpenAI)
-ANTHROPIC_API_KEY=... python denoise.py artigos/ -m anthropic:claude-3-haiku-20240307
-LLM_API_KEY=... python denoise.py artigos/ -m compat:meta-llama/llama-3.1-8b-instruct --base-url https://openrouter.ai/api/v1
-
-# mais fundo (custa mais): notas feitas por LLM e um passe extra de revisão
-python denoise.py artigos/ -m ollama:qwen2.5:7b-instruct --notas openai:gpt-4o-mini --revisao ollama:llama3.2:3b
-
-# só limpeza grátis (invisíveis + metadados de .docx/.pdf/.png/.jpg), sem LLM
-python denoise.py artigo.docx figura.png -o limpos/ --so-limpar
+pip install git+https://github.com/ohariseldon/babelllm            # comando `babelllm`
+pip install "babelllm[docs] @ git+https://github.com/ohariseldon/babelllm"  # + .docx e .pdf
 ```
 
-Opções: `--rpm 15` teto de pedidos por minuto (plano grátis do Gemini aceita 15; sem `--rpm`,
-o script reduz o ritmo sozinho quando recebe 429 e espera o tempo que a API pede), `-j N` chamadas simultâneas (padrão: todos os trechos de uma vez, até 256;
-baixe se a API devolver 429), `--palavras 150` tamanho do trecho, `--formato docx`,
-`--idioma pt|en`, `--relatorio rel.json`. Entradas: .md .txt .docx .pdf.
+Ou só baixe o `denoise.py` e rode com `python denoise.py` (Python 3.10+).
 
-## O que ele faz, por trecho de até ~150 palavras
+## Uso rápido
 
-1. **Limpeza grátis**: caracteres invisíveis (largura zero, tags, bidi, seletores) saem;
-   .docx gravado sai sem autor, datas e partes C2PA.
-2. **Notas locais, sem LLM**: cada frase vira só as palavras de conteúdo. Saem artigos,
-   preposições e muletas ("vale ressaltar", "além disso"); ficam números, nomes, citações,
-   negação e conectivos lógicos (mas, portanto, however).
-3. **Redator**: um modelo escreve o trecho do zero a partir das notas, sem ver a prosa
-   original. Se faltar número, citação ou URL, tenta de novo uma vez.
+```bash
+# modelo local (o mais seguro: não marca o que escreve)
+babelllm artigos/ -o limpos/ -m ollama:qwen2.5:7b-instruct
 
-Uma chamada por trecho. Títulos, código e tabelas não são tocados. Todos os trechos
-de todos os artigos saem ao mesmo tempo, em conexões HTTP persistentes.
+# API barata de outro fornecedor que não o que gerou o texto
+ANTHROPIC_API_KEY=... babelllm artigos/ -o limpos/ -m anthropic:claude-haiku-4-5
+OPENAI_API_KEY=...    babelllm artigos/ -o limpos/ -m openai:gpt-4o-mini
+GEMINI_API_KEY=...    babelllm artigos/ -o limpos/ -m gemini:gemini-2.5-flash --rpm 15   # plano grátis
+LLM_API_KEY=...       babelllm artigos/ -o limpos/ -m compat:meta-llama/llama-3.1-8b-instruct \
+                               --base-url https://openrouter.ai/api/v1
 
-## Marcadores removíveis (`--marcadores N`)
+# remoção mais forte contra marcas de contexto
+babelllm artigos/ -o limpos/ -m anthropic:claude-haiku-4-5 --marcadores 5
 
-Com `--marcadores N`, o último modelo a escrever (o redator, ou o revisor se houver)
-insere o símbolo `¦` cerca de N vezes a cada 10 palavras, e o script apaga todos
-antes de gravar. Uma marca d'água do tipo SynthID escolhe cada token olhando os
-poucos tokens anteriores. Os tokens escritos logo depois de um `¦` foram escolhidos
-num contexto que não existe mais no texto final, então ali o detector vê cara ou coroa.
+# só a limpeza grátis: caracteres invisíveis e metadados (.docx .pdf .png .jpg), sem modelo
+babelllm artigo.docx figura.png -o limpos/ --so-limpar
+```
 
-- **Quanto mais marcadores, melhor a remoção.** Com `2.5` (um a cada 4 palavras),
-  quase toda palavra fica coberta se a janela da marca for de até 4 tokens; com `5` ou `10`,
-  janelas menores também caem. O preço é fluidez: o modelo escreve "em volta" dos marcadores.
-- O relatório mostra quantos marcadores o modelo de fato pôs e a `cobertura_marcadores`
-  (fração das palavras com um marcador nas 4 posições anteriores).
-- Serve para quando o redator é um modelo que também marca texto. Com redator local
-  que não marca, não é preciso.
-- Não afeta marcas que não dependem de contexto (lista verde fixa).
-- Custa até N×10% a mais de tokens de saída.
+Entradas: `.md`, `.txt`, `.docx`, `.pdf` (arquivos ou pastas). Saída no mesmo formato, ou `--formato md|txt|docx`.
 
-## Sigilo (padrão)
+## A regra que importa
 
-Antes de ir para a API, números, nomes próprios, siglas, links e citações viram códigos com
-chave aleatória por trecho: `{Nkq}` número, `{Exm}` nome (`{Emxm}`/`{Efxm}` com gênero, quando
-o artigo do original diz), `{Lab}` link, `{Cab}` citação. O modelo nunca vê os dados reais,
-não faz conta nem "corrige" fatos; o script destroca no fim. Se um código some, o redator
-tenta de novo pedindo o código (nunca o dado), e o que faltar sai em `itens_perdidos`.
-Nomes são as palavras com maiúscula no meio de frase que nunca aparecem em minúscula no
-artigo, mais as siglas. Ida e volta testada nos 269 trechos de 20 artigos reais: idêntica.
-Custa ~20% a mais de tokens de entrada. `--sigilo nao` (ou `--sem-sigilo`) desliga.
+**O último modelo a escrever deixa a marca dele.** Não use como redator o modelo que gerou o artigo,
+nem outro que também marque texto. Modelo local é o caminho mais seguro; se usar uma API que marca,
+use `--marcadores` (abaixo).
 
-`--sigilo forte` também esconde as palavras de direção e polaridade (subiu, caiu, cresceu,
-mais, menos, maior, não, nunca, recorde; rose, fell, more, less, not...). O modelo escreve
-"a taxa {Pab} {Ncd}" sem saber se a taxa subiu ou caiu, e não tem como "raciocinar" sobre
-a conclusão. A volta é exata (cada forma da palavra tem seu código). O risco é de fluidez:
-o modelo escreve em volta de palavras que não conhece.
+## Como funciona
 
-## Reorganização da lógica
+Para cada trecho de até ~150 palavras (títulos, código e tabelas não são tocados):
 
-Por padrão o redator também muda a ordem das ideias, junta e divide frases e inverte
-causa e efeito quando o sentido deixa. Isso mira marcas de nível de frase ou de sentido
-que ainda não conhecemos (que olham a sequência de frases, não só as palavras).
-`--manter-logica` desliga.
+1. **Limpeza**: saem caracteres invisíveis (largura zero, tags Unicode, bidi, seletores de variação) e,
+   nos `.docx` gravados, autor, datas e partes C2PA.
+2. **Sigilo** (padrão): números, nomes próprios, siglas, links e citações viram códigos com chave
+   aleatória. O modelo não sabe os valores, não faz conta e não "corrige" fatos.
+3. **Notas locais**, sem modelo: cada frase vira só as palavras de conteúdo. Saem artigos, preposições e
+   muletas ("vale ressaltar"); ficam negação e conectivos lógicos.
+4. **Redator**: o modelo escreve o trecho do zero a partir das notas, sem ver a prosa original. Ele também
+   reorganiza a ordem das ideias e troca por sinônimos pelo menos metade das palavras de conteúdo.
+5. **Conferência**: todo código precisa voltar. Se faltar algum, o redator recebe só o que faltou (o código,
+   nunca o dado) e insere no próprio texto. O que ainda faltar aparece no relatório.
+6. **Destroca** local dos códigos e gravação.
 
-## Regra que importa
+Todos os trechos de todos os arquivos vão ao mesmo tempo, em conexões persistentes. Ao receber 429, o
+script pausa pelo tempo que a API pede e retoma.
 
-O último modelo a escrever deixa a marca dele. Então o redator (e o revisor, se usar) não podem
-ser o modelo que gerou o artigo, nem outro que também marque texto. Modelo local
-(Ollama) é o caminho mais seguro; uma API de outro fornecedor também serve.
+### Marcadores removíveis (`--marcadores N`)
 
-## O relatório
+O redator escreve com o símbolo `¦` cerca de N vezes a cada 10 palavras, e o script apaga todos antes de
+gravar. Uma marca do tipo SynthID escolhe cada token olhando os poucos tokens anteriores; depois de um `¦`
+apagado, o contexto que o modelo viu não existe mais no texto final e o detector vê cara ou coroa.
+Quanto maior N, melhor a remoção e menor a fluidez. O relatório mostra a cobertura real alcançada.
 
-Por arquivo: `rho_3gramas` (fração dos trigramas da saída que já estavam no original;
-quanto menor, menos da sequência original sobreviveu), `itens_perdidos` (números e
-citações que não voltaram, confira esses à mão), invisíveis removidos e erros.
-No fim: chamadas e tokens por modelo. O script não diz que o texto está "seguro":
-nenhuma ferramenta sem a chave da marca pode afirmar isso.
+### Sigilo forte (`--sigilo forte`)
 
-## Tempo e custo (medido com servidor simulado)
+Também esconde as palavras de direção e polaridade (subiu, caiu, mais, menos, maior, não, recorde; rose,
+fell, more, less, not...). O modelo escreve "a taxa {Pab} {Ncd}" sem saber se a taxa subiu ou caiu.
+A volta é exata. Custa fluidez.
 
-20 artigos de ~1.000 palavras, API simulada (0,6 s até o primeiro token).
+## Opções
 
-| versão | chamadas | tokens (entrada + saída) | 90 tokens/s | 50 tokens/s |
-|---|---|---|---|---|
-| v0.3 (notas LLM + redator + revisão, trechos de 350) | 234 | 90 mil + 79 mil | 21,2 s | 35,2 s |
-| **v0.4 padrão** (notas locais + redator, trechos de 150) | 241 | 35 mil + 33 mil | **3,4 s** | **5,5 s** |
-| v0.4 com `--revisao` | 482 | 61 mil + 51 mil | 5,5 s | 8,8 s |
-| v0.4 com `-j 64` | 241 | 35 mil + 33 mil | 9,5 s | 15,1 s |
+| opção | o que faz |
+|---|---|
+| `-m provedor:modelo` | redator (`ollama`, `openai`, `anthropic`, `gemini`, `compat` + `--base-url`) |
+| `--marcadores N` | 0 a 10 marcadores removíveis por 10 palavras (padrão 0) |
+| `--sigilo basico\|forte\|nao` | o que vai como código para a API (padrão `basico`) |
+| `--manter-logica` | não reorganiza ideias nem troca sinônimos |
+| `--notas provedor:modelo` | notas feitas por um modelo em vez de locais (reescrita mais funda, ~2× o custo) |
+| `--revisao provedor:modelo` | um passe extra de correção depois do redator |
+| `--rpm N` | teto de pedidos por minuto (ex.: 15 no plano grátis do Gemini) |
+| `-j N` | chamadas simultâneas (padrão: todos os trechos, até 256; Ollama: 8) |
+| `--palavras N` | tamanho máximo do trecho (padrão 150) |
+| `--idioma auto\|pt\|en` | idioma (padrão: detecta) |
+| `--relatorio arquivo.json` | relatório por arquivo |
+| `--so-limpar` | só invisíveis e metadados, sem modelo |
 
-O que é estimativa: a contagem de tokens vem do simulador (1,4 token por palavra;
-português gasta um pouco mais) e a API real pode limitar pedidos simultâneos (429).
-Com modelo local o tempo depende da máquina.
+O modelo não recebe `temperature` a menos que você passe `--temperatura` (vários modelos novos recusam).
 
-Para repetir: `python bench/make_articles.py bench/artigos`, `python bench/mock_server.py --tps 90 &`,
-`python denoise.py bench/artigos -o /tmp/o -m compat:mock --base-url http://127.0.0.1:8765/v1`.
+## Relatório
 
-## Testes
+Por arquivo: trechos, erros, `itens_perdidos` (números, nomes ou citações que não voltaram; confira à mão),
+`rho_3gramas` (fração dos trigramas da saída que já estavam no original), marcadores e cobertura, invisíveis
+removidos. No fim: chamadas e tokens por modelo. O script não diz que o texto está "seguro": sem a chave
+de uma marca, ninguém pode afirmar isso.
 
-`python -m pytest -q tests` (19 testes, sem rede).
+## Resultados
 
-## O que saiu da v0.2 e por quê
+Medidos em 20 artigos reais em português (~1.500 palavras cada), com Claude Haiku 4.5:
 
-Modo de regras e perturbação (estragava o texto e relatava "seguro"), métricas de
-cobertura e z estimado, tradução de ida e volta, rodízio de modelos, tipografia,
-comparação de textos, embeddings e perplexidade. Na v0.4 as notas por LLM e a revisão viraram opcionais.
+- **Tempo**: 20 artigos em 37,6 s; 4 artigos em 14 s.
+- **Tokens**: ~123 mil de entrada e ~66 mil de saída nos 20 artigos.
 
-Troca da v0.4: as notas locais mantêm as palavras de conteúdo do original na ordem, então
-sobra mais vocabulário do original do que com notas feitas por LLM. A costura das frases
-é toda refeita. Se quiser reescrita mais funda, use `--notas provedor:modelo`. (A v0.2, com todos esses caminhos, não faz parte deste repositório.)
+**Teste de marca d'água com chave própria** (`bench/marca_teste.py`): marcamos o artigo escolhendo, para cada
+frase, a paráfrase com mais palavras "verdes" (o princípio do SynthID), e medimos o z-score antes e depois.
+z > 4 = marca detectada; |z| < 2 = indistinguível de texto sem marca.
+
+| artigo de demografia | sem contexto | contexto de 1 palavra | contexto de 3 palavras |
+|---|---|---|---|
+| original | 0,2 | −0,1 | 0,1 |
+| marcado | 2,1 | 2,6 | **4,2** |
+| babelllm padrão | 1,2 | 1,5 | 2,1 |
+| babelllm `--marcadores 5` | 1,7 | 1,9 | **0,1** |
+
+Num segundo artigo, a marca de contexto 3 foi de 5,2 para 0,2 com `--marcadores 5`. A lista verde fixa
+(sem contexto) é a que mais resiste, porque as palavras de conteúdo sobrevivem; a troca de sinônimos no
+redator mira esse caso.
+
+Para repetir: `python bench/marca_teste.py artigo.md -m anthropic:claude-haiku-4-5`.
+Para medir só o tempo sem gastar tokens: `bench/mock_server.py` simula uma API compatível com OpenAI.
+
+## Limites
+
+- **Detectores de estilo não são o alvo.** Classificadores de "texto de IA" (do tipo Pangram/GPTZero)
+  olham o estilo, e o texto de saída é escrito por um modelo. O babelllm remove marcas d'água, não a
+  aparência de texto de IA.
+- **Marcas que não dependem de contexto** (lista verde fixa) caem menos que as de contexto.
+- **Marcas futuras**: não há como testar contra o que ainda não foi publicado. O desenho (notas sem a
+  prosa, códigos, reorganização, sinônimos, marcadores) ataca os mecanismos conhecidos, não garante o resto.
+- **Qualidade**: modelos pequenos às vezes perdem um código ou escrevem pior em volta deles. Confira os
+  `itens_perdidos` e leia o texto antes de publicar.
+- **C2PA em imagens**: os metadados saem; credenciais duráveis (marca nos pixels) não.
+
+## Uso responsável
+
+Feito para quem publica o próprio trabalho com ajuda de IA e assume isso. Não use para se passar por
+autor de texto alheio, nem para burlar regras de uma escola, revista ou empregador que proíbam IA.
+
+## Desenvolvimento
+
+```bash
+pip install -e '.[docs,dev]'
+python -m pytest -q tests      # 20 testes, sem rede
+```
+
+Contribuições são bem-vindas: abra uma issue antes de mudanças grandes.
+
+---
+
+## English summary
+
+**babelllm** removes statistical LLM text watermarks (SynthID-style) from your own AI-assisted articles,
+in batch, using any cheap model you choose (local Ollama, OpenAI, Anthropic, Gemini, any OpenAI-compatible
+endpoint). It is a single stdlib-only Python file.
+
+For each ~150-word chunk it strips invisible Unicode and file metadata, replaces numbers, names, acronyms,
+links and citations with keyed codes (the API never sees them), builds local content-word notes, and has the
+writer model rewrite the chunk from the notes only, reordering ideas and swapping synonyms. Codes are verified
+and restored locally. Optional removable markers (`--marcadores N`) break the context window of the writer's
+own watermark. Measured: 20 real articles in 37.6 s with Claude Haiku 4.5; an own-key context watermark went
+from z = 4.2–5.2 to 0.1–0.2. It is not a humanizer and does not target AI-style classifiers.
+
+```bash
+pip install git+https://github.com/ohariseldon/babelllm
+babelllm articles/ -o clean/ -m ollama:qwen2.5:7b-instruct --idioma en
+```
+
+License: MIT.

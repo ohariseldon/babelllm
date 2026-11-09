@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "babelllm"
+version = "0.7.0"
+description = "Remove LLM text watermarks from your own AI-assisted articles, in batch, with a cheap model of your choice."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Natural Language :: Portuguese (Brazilian)",
+  "Natural Language :: English",
+  "Topic :: Text Processing",
+]
+
+[project.optional-dependencies]
+docs = ["python-docx>=1.1", "pypdf>=4"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+babelllm = "denoise:main"
+
+[project.urls]
+Homepage = "https://github.com/ohariseldon/babelllm"
+
+[tool.setuptools]
+py-modules = ["denoise"]

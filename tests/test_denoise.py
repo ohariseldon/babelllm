@@ -82,6 +82,8 @@ def test_end_to_end(tmp_path):
 
 
 def test_docx_out_has_no_metadata(tmp_path):
+    import pytest
+    pytest.importorskip("docx")
     p = tmp_path / "x.docx"
     d.write_any("# T\n\nUm parágrafo.\n\n- item um\n- item dois", p)
     z = zipfile.ZipFile(p)
