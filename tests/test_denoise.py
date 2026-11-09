@@ -469,3 +469,29 @@ def test_fatos_keeps_paragraphs_and_fixes_doubled_prep():
     p = d.process_piece(d.Piece(src, True), "pt", "fatos", Cap(notas=lambda u: u, redator=red), None, secret=False)
     assert "2 parágrafos" in seen["sys"]
     assert "entre 2015 e 2016" in p.out and "3 milhões de crianças" in p.out and "milhões de de" not in p.out
+
+
+def test_style_examples_go_to_writer_and_copy_is_redone(tmp_path):
+    (tmp_path / "a.md").write_text("# Título\n\n" + " ".join(["palavra"] * 10) + "\n\n" +
+                                   "O governo anunciou ontem, depois de semanas de conversa com os estados, que o plano "
+                                   "de obras seria revisto porque faltava dinheiro e sobrava pressa, embora ninguém "
+                                   "quisesse admitir isso em público naquela manhã de chuva fina no planalto central.",
+                                   encoding="utf-8")
+    style = d.load_style(tmp_path)
+    assert len(style) == 1 and style[0].startswith("O governo")
+    systems = []
+    class Cap(Fake):
+        def __call__(self, system, user, max_tokens=0):
+            systems.append(system)
+            return super().__call__(system, user, max_tokens)
+    outs = iter(["Caiu a venda naquela manhã de chuva fina no planalto.", "A venda caiu 5% no mês."])
+    p = d.process_piece(d.Piece("A venda caiu 5% no mês.", True), "pt", None,
+                        Cap(redator=lambda u: next(outs)), None, secret=False, style=style)
+    assert "FORMA" in systems[0] and "O governo anunciou" in systems[0]
+    assert "O governo anunciou" not in systems[1]
+    assert p.out == "A venda caiu 5% no mês." and any("exemplo" in x for x in p.lost)
+
+
+def test_copied_ignores_ngrams_from_source():
+    assert not d.copied("a casa de pedra do rio", ["uma casa de pedra do rio azul"], "a casa de pedra do rio")
+    assert d.copied("vimos a casa de pedra do rio", ["uma casa de pedra do rio azul"], "vimos tudo")

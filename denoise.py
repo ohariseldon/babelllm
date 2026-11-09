@@ -55,7 +55,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 # ---------------------------------------------------------------- Unicode
 
@@ -392,6 +392,10 @@ PROMPTS = {
                       "do efeito para a causa", "do geral para o detalhe", "do detalhe para o geral",
                       "do dado mais forte para o mais fraco"],
         },
+        "humano": (" Imite só a FORMA destes trechos escritos por pessoas (tamanho e mistura das frases, orações "
+                   "subordinadas, conectivos, pontuação, tom); não use nenhum fato, nome, número ou expressão deles:\n{x}"),
+        "longas": (" Onde o original tem frases longas com orações subordinadas (que, porque, embora, quando, enquanto), "
+                   "mantenha frases longas e subordinadas; não quebre em frases curtas paralelas."),
         "redator": ("Escreva em português do Brasil, como prosa de artigo, o que estas notas dizem, sem acrescentar "
                     "nada. Palavras e ordem suas, frases de tamanhos variados, sem clichês de IA. Bloco de notas = "
                     "parágrafo; '[lista]' = item com '- '. Números, nomes, citações e URLs exatos. Não acrescente fatos, "
@@ -469,6 +473,10 @@ PROMPTS = {
             "grupo": ["by actor (who does what)", "by time (oldest to newest)", "from effect to cause",
                       "from general to detail", "from detail to general", "from strongest to weakest data point"],
         },
+        "humano": (" Imitate only the FORM of these passages written by people (sentence length and mix, subordinate "
+                   "clauses, connectives, punctuation, tone); use none of their facts, names, numbers or phrases:\n{x}"),
+        "longas": (" Where the original has long sentences with subordinate clauses (that, because, although, when, while), "
+                   "keep long subordinate sentences; do not break them into short parallel sentences."),
         "redator": ("Write, as English article prose, what these notes say, adding nothing. Your own words and order, "
                     "varied sentence length, no AI stock phrases. Note block = paragraph; '[list]' = '- ' item. "
                     "Numbers, names, citations and URLs exact. Add no facts, causes, examples or opinions; plain tone; "
@@ -1093,9 +1101,35 @@ def _no_heads(s: str, heading: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(keep)).strip()
 
 
+def load_style(folder: Path) -> list[str]:
+    """Parágrafos humanos de 40 a 120 palavras, sem título, lista ou tabela, de .md/.txt/.jsonl (pasta ou arquivo)."""
+    out = []
+    files = [folder] if folder.is_file() else sorted(folder.rglob("*"))
+    for f in files:
+        if f.suffix.lower() not in {".md", ".txt", ".jsonl"}:
+            continue
+        txt = f.read_text(encoding="utf-8", errors="replace")
+        if f.suffix.lower() == ".jsonl":  # um texto por linha, com "paragrafos" (lista) ou "texto"
+            rows = [json.loads(l) for l in txt.splitlines() if l.strip()]
+            txt = "\n\n".join("\n\n".join(r.get("paragrafos") or [r.get("texto", "")]) for r in rows)
+        for b in re.split(r"\n\s*\n", txt):
+            b = " ".join(b.split())
+            if 40 <= len(b.split()) <= 120 and not re.match(r"^(#|[-*|>]|\d+[.)])", b):
+                out.append(b)
+    return out
+
+
+def copied(out: str, style: list[str], src: str, n: int = 5) -> bool:
+    """A saída tem uma sequência de n palavras de um exemplo que não está no original?"""
+    w = lambda t: re.findall(r"[\wÀ-ÿ]+", t.lower())
+    grams = lambda t: {tuple(t[i:i + n]) for i in range(len(t) - n + 1)}
+    mine = grams(w(out)) - grams(w(src))
+    return any(mine & grams(w(x)) for x in style)
+
+
 def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revisao: Model | None,
                   marks: float = 0.0, logic: bool = True, secret: bool = True, names: set[str] | None = None,
-                  rng=None, verify=None) -> Piece:
+                  rng=None, verify=None, style: list[str] | None = None) -> Piece:
     """``marks`` = marcadores por 10 palavras (0 desliga). O último modelo a escrever os insere.
     ``secret``: números, nomes, links e citações vão ao modelo como códigos e voltam no fim."""
     P = PROMPTS[lang]
@@ -1119,7 +1153,13 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         E, r = P["estrutura"], rng or _rng
         colon = "" if ":" in p.text else (", sem frase de efeito com dois-pontos" if lang == "pt" else ", no colon punchlines")
         struct = E["base"].format(a=r.choice(E["abertura"]), r=r.choice(E["ritmo"]), e=r.choice(E["enumeracao"]), c=colon)
+    human = ""
+    if style:  # forma de trechos humanos reais do mesmo gênero, sorteados por trecho
+        picks = (rng or _rng).sample(style, min(3, len(style)))
+        human = P["humano"].format(x="\n".join(f"«{x}»" for x in picks))
     w_sys = P["redator"] + (P["logica"] + struct if logic else "") + codes_rule + ("" if revisao else mark_rule)
+    if style:
+        w_sys += P["longas"] + human
     r_sys = P["revisao"] + codes_rule + mark_rule
 
     def clean(s: str) -> tuple[str, str, list[str]]:
@@ -1176,6 +1216,10 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         else:
             w_sys += frame
             coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
+            if human and copied(draft, style, p.text):  # copiou expressão do exemplo: refaz sem exemplos
+                w_sys = w_sys.replace(human, "")
+                coded, draft, lost = clean(redator(w_sys, head + notes + size, max_tokens=cap))
+                p.lost.append("(exemplo de estilo copiado; refeito sem exemplos)")
         pairs = code_pairs(src) if vault else []
         bad = broken_pairs(pairs, coded)
         if bad:  # número trocado de ano: refaz uma vez, avisando quais pares andam juntos
@@ -1250,7 +1294,8 @@ def process_piece(p: Piece, lang: str, notas: Model | None, redator: Model, revi
         if vault and pairs:
             bad = broken_pairs(pairs, coded)
             extra += [f"(par trocado: {vault.back[n]} / {vault.back[a]})" for n, a in bad]
-        p.lost = miss + extra + [f"(sentido a conferir: {x[:90]})" for x in p.meaning]
+        p.lost = [x for x in p.lost if x.startswith("(exemplo")] + miss + extra + \
+            [f"(sentido a conferir: {x[:90]})" for x in p.meaning]
         p.patterns = ai_patterns(out, lang)
     except Exception as e:  # noqa: BLE001 - o lote não para por um trecho
         p.error = str(e)
@@ -1286,7 +1331,8 @@ _rng = __import__("random").SystemRandom()
 
 def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | None, revisao: Model | None,
         jobs: int, max_words: int, fmt: str | None, only_clean: bool, lang_opt: str,
-        marks: float = 0.0, logic: bool = True, secret: bool | str = True, verify=None) -> dict:
+        marks: float = 0.0, logic: bool = True, secret: bool | str = True, verify=None,
+        style: list[str] | None = None) -> dict:
     outdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     docs = []
@@ -1299,11 +1345,13 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
     if not only_clean:
         todo = [(p, d["lang"], d["names"]) for d in docs for p in d["pieces"] if p.rewrite]
         if not jobs:  # API: tudo de uma vez. Ollama atende poucos pedidos por vez (OLLAMA_NUM_PARALLEL).
-            local = any(m is not None and not isinstance(m, str) and m.provider == "ollama" for m in (notas, redator, revisao))
+            local = any(m is not None and not isinstance(m, str) and m.provider == "ollama"
+                        for m in (notas, revisao, *(redator if isinstance(redator, list) else [redator])))
             jobs = 8 if local else max(1, min(256, len(todo)))
         with ThreadPoolExecutor(max_workers=jobs) as pool:
-            futs = [pool.submit(process_piece, p, lang, notas, redator, revisao, marks, logic, secret, names,
-                                None, verify)
+            reds = redator if isinstance(redator, list) else [redator]  # vários redatores: um sorteado por trecho
+            futs = [pool.submit(process_piece, p, lang, notas, _rng.choice(reds), revisao, marks, logic, secret, names,
+                                None, verify, style)
                     for p, lang, names in todo]
             done = 0
             for fu in futs:
@@ -1339,7 +1387,7 @@ def run(files: list[Path], outdir: Path, notas: Model | None, redator: Model | N
         })
     report["segundos"] = round(time.time() - t0, 2)
     seen = {}
-    for m in (notas, redator, revisao, verify):
+    for m in (notas, revisao, verify, *(redator if isinstance(redator, list) else [redator])):
         if m is not None and not isinstance(m, str) and id(m.usage) not in seen:
             seen[id(m.usage)] = (m.spec, m.usage)
     report["uso"] = [{"modelo": s, "chamadas": u.calls, "tokens_entrada": u.tin, "tokens_saida": u.tout}
@@ -1369,7 +1417,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Tira a marca d'água de LLM de artigos, em lote.")
     ap.add_argument("entradas", nargs="+", help="arquivos ou pastas (.md .txt .docx .pdf)")
     ap.add_argument("-o", "--saida", default="limpos", help="pasta de saída (padrão: limpos/)")
-    ap.add_argument("-m", "--modelo", help="modelo redator (provedor:modelo); é o último a escrever")
+    ap.add_argument("-m", "--modelo", help="modelo redator (provedor:modelo); é o último a escrever. Vários separados por vírgula: um sorteado por trecho")
     ap.add_argument("--redator", help="sinônimo de -m")
     ap.add_argument("--notas", default="prosa",
                     help="o que o redator recebe: 'prosa' (padrão: o texto codificado inteiro, o mais fiel), "
@@ -1380,6 +1428,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--verificar", metavar="provedor:modelo",
                     help="juiz opcional que compara original e reescrita (ambos codificados) e manda refazer o "
                          "trecho que mudou de sentido; ~1 chamada a mais por trecho")
+    ap.add_argument("--exemplos", metavar="PASTA",
+                    help="pasta ou arquivo com textos humanos (.md/.txt/.jsonl) do mesmo gênero: a cada trecho o redator recebe 3 "
+                         "parágrafos sorteados como modelo só de forma (frases, conectivos, pontuação)")
     ap.add_argument("--revisao", help="modelo de uma revisão extra depois do redator (padrão: nenhuma)")
     ap.add_argument("--marcadores", type=float, default=0, metavar="N",
                     help="marcadores por 10 palavras que o último modelo insere e o script apaga (0 a 10; "
@@ -1413,11 +1464,12 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("informe -m provedor:modelo, ou use --so-limpar")
         pool: dict[str, Model] = {}
         mk = lambda s: pool.setdefault(s, Model(s, a.base_url, a.temperatura, rpm=a.rpm))
-        redator = mk(spec)
+        specs = [x.strip() for x in spec.split(",") if x.strip()]
+        redator = mk(specs[0]) if len(specs) == 1 else [mk(x) for x in specs]
         notas = None if a.notas.lower() == "local" else a.notas.lower() if a.notas.lower() in ("prosa", "fatos") else mk(a.notas)
         revisao = mk(a.revisao) if a.revisao and a.revisao.lower() not in {"nao", "não", "no", "off"} else None
         verify = mk(a.verificar) if a.verificar else None
-        last = revisao or redator
+        last = revisao or (redator[0] if isinstance(redator, list) else redator)
         if last.provider in ("anthropic", "gemini") or (last.provider == "openai" and "gpt" in last.spec):
             print(f"aviso: {last.spec} é de um fornecedor que pode marcar o texto que escreve. A marca de origem sai, "
                   "mas a do redator entra. Prefira um modelo local (ollama:...) ou use --marcadores.", file=sys.stderr)
@@ -1427,7 +1479,7 @@ def main(argv: list[str] | None = None) -> int:
               "." + a.formato if a.formato else None, a.so_limpar, a.idioma,
               max(0.0, min(10.0, a.marcadores)), not a.manter_logica,
               False if (a.sem_sigilo or a.sigilo == "nao") else (a.sigilo if a.sigilo in ("forte", "nomes") else True),
-              verify)
+              verify, load_style(Path(a.exemplos)) if a.exemplos else None)
     if a.relatorio:  # antes de imprimir: um console que não aceita algum caractere não pode perder o relatório
         Path(a.relatorio).write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
     for f in rep["arquivos"]:
