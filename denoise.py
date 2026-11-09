@@ -354,7 +354,7 @@ PROMPTS = {
         "redator_prosa": ("Reescreva em português do Brasil, como prosa de artigo, o texto abaixo com outras palavras "
                           "e outra construção de frase, dizendo exatamente o mesmo: mesmos fatos, mesmas relações entre "
                           "eles (quem, quanto, quando, a mais ou a menos, causa), sem acrescentar nada. Frases de "
-                          "tamanhos variados, sem clichês de IA, tom sóbrio, sem títulos, sem alongar: mesmo tamanho ou menor. "
+                          "tamanhos variados, sem clichês de IA, tom sóbrio, sem títulos, sem alongar e sem omitir nenhum item, nome ou número. "
                           "Só o texto."),
         "revisao": ("Revise este trecho em português do Brasil: corrija gramática e frases estranhas, pode trocar "
                     "palavras. Sem acrescentar ou tirar informação; números, citações e listas intactos. Só o trecho."),
@@ -389,8 +389,8 @@ PROMPTS = {
                     "length close to the one asked. No headings. Text only."),
         "redator_prosa": ("Rewrite the English text below in other words and other sentence structure, saying exactly "
                           "the same: same facts, same relations between them (who, how much, when, more or less, cause), "
-                          "adding nothing. Varied sentence length, no AI stock phrases, plain tone, no headings, no longer than the "
-                          "original. Text only."),
+                          "adding nothing. Varied sentence length, no AI stock phrases, plain tone, no headings, no padding and no item, name or number left out "
+                          "(keep every item). Text only."),
         "revisao": ("Copy-edit this English passage: fix grammar and awkward sentences, you may change words. Add or "
                     "remove nothing; keep numbers, citations and lists. Passage only."),
         "secao": "(context, do not write: section «{h}»)\n\n", "faltou": "\n\nAlso include: {x}",
